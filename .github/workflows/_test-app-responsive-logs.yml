@@ -1,0 +1,47 @@
+name: Test app responsive e log registratore
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/_test-app-responsive-logs.yml"
+
+permissions:
+  contents: read
+
+env:
+  SOURCE_PAT: ${{ secrets.PUBLIC_REPO_TOKEN }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout app privata
+        uses: actions/checkout@v4
+        with:
+          repository: Mirkolas/riflessahairbeauty
+          ref: main
+          token: ${{ env.SOURCE_PAT }}
+          path: app
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Test app e sintassi log sync
+        working-directory: app/riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --ignore-scripts --no-audit --no-fund
+          npm test
+          npm run check
+          node --check electron/main.js
+          node --check electron/preload.js
+          node --check js/log-sync.js
+          test -s responsive.css
+          grep -q 'max-width:760px' responsive.css
+          grep -q 'listLocalBackupFiles' electron/main.js
+          grep -q 'registratoreLogFiles' js/log-sync.js
+          grep -q 'riflessa-15a20.web.app' electron/main.js
+          echo "Responsive, log sync e target registratore: OK"
