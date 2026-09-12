@@ -1,0 +1,78 @@
+name: Corregge backup e responsive web
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/_repair-backup-responsive.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout workflow repo
+        uses: actions/checkout@v4
+        with:
+          path: workflows
+          persist-credentials: true
+
+      - name: Correggi sintassi backup
+        working-directory: workflows
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('.github/workflows/firebase-backup-registratore.yml')
+          s=p.read_text()
+          old='''              node -e "const m=require('./${LOCAL_DIR}/manifest.json');'''
+          new='''              if node -e "const m=require('./${LOCAL_DIR}/manifest.json');'''
+          if old not in s:
+              raise SystemExit('Blocco backup da correggere non trovato')
+          s=s.replace(old,new,1)
+          p.write_text(s)
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/workflows/firebase-backup-registratore.yml
+          git commit -m "Corregge sintassi backup completo registratore"
+          git push origin HEAD:main
+
+      - name: Checkout app privata
+        uses: actions/checkout@v4
+        with:
+          repository: Mirkolas/riflessahairbeauty
+          ref: main
+          token: ${{ secrets.PUBLIC_REPO_TOKEN }}
+          path: app
+          persist-credentials: true
+
+      - name: Collega responsive.css anche alla web app
+        working-directory: app
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions/index.html')
+          s=p.read_text()
+          marker='<link rel="stylesheet" href="styles.css">'
+          link='<link id="riflessa-responsive-css" rel="stylesheet" href="responsive.css">'
+          if link not in s:
+              if marker not in s:
+                  raise SystemExit('Link styles.css non trovato')
+              s=s.replace(marker, marker+'\n  '+link, 1)
+              p.write_text(s)
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions/index.html
+          if git diff --cached --quiet; then
+            echo "responsive.css gia collegato"
+          else
+            git commit -m "Collega responsive CSS alla web app registratore"
+            git push origin HEAD:main
+          fi
