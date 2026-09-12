@@ -94,8 +94,8 @@ jobs:
             exit 1
           fi
 
-          if ! find "${BACKUP_PATH}" -type f -name '*.overall_export_metadata' -print -quit | grep -q .; then
-            echo "::error::Backup Firestore incompleto: metadata di esportazione assente."
+          if [[ ! -f "${BACKUP_PATH}/${BACKUP_NAME}.overall_export_metadata" ]]; then
+            echo "::error::Backup Firestore incompleto o nome metadata non coerente."
             exit 1
           fi
 
@@ -143,7 +143,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          RESTORE_URI="gs://${BACKUP_BUCKET}/registratore/restore/${{ steps.backup.outputs.name }}-${GITHUB_RUN_ID}"
+          RESTORE_URI="gs://${BACKUP_BUCKET}/registratore/restore/${GITHUB_RUN_ID}/${{ steps.backup.outputs.name }}"
           gcloud storage rsync \
             "backup-repo/${{ steps.backup.outputs.path }}" \
             "${RESTORE_URI}" \
