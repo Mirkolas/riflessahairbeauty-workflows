@@ -14,7 +14,7 @@ jobs:
   dispatch:
     runs-on: ubuntu-latest
     steps:
-      - name: Avvia deploy definitivo
+      - name: Avvia deploy definitivo V3
         uses: actions/github-script@v7
         with:
           script: |
@@ -25,4 +25,4 @@ jobs:
               ref: 'main',
               inputs: { ref: 'main' }
             });
-            console.log('Deploy registratore avviato.');
+            console.log('Deploy registratore V3 avviato.');
