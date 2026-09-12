@@ -1,4 +1,4 @@
-name: Test Firebase Authentication backup
+name: Test permesso Firebase Rules registratore
 
 on:
   push:
@@ -11,55 +11,50 @@ permissions:
 
 env:
   PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID }}
-  GOOGLE_CREDENTIALS_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-  AUTH_HASH_CONFIG: ${{ secrets.FIREBASE_AUTH_HASH_CONFIG }}
+  FIREBASE_TOKEN_VALUE: ${{ secrets.FIREBASE_TOKEN }}
+  SOURCE_PAT: ${{ secrets.PUBLIC_REPO_TOKEN }}
 
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/setup-node@v4
+      - name: Verifica presenza FIREBASE_TOKEN
+        id: token
+        shell: bash
+        run: |
+          if [[ -n "${FIREBASE_TOKEN_VALUE}" ]]; then
+            echo "present=true" >> "${GITHUB_OUTPUT}"
+            echo "FIREBASE_TOKEN presente: provo il deploy delle sole regole."
+          else
+            echo "present=false" >> "${GITHUB_OUTPUT}"
+            echo "FIREBASE_TOKEN non configurato nella repo workflow."
+          fi
+
+      - name: Checkout app privata
+        if: steps.token.outputs.present == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: Mirkolas/riflessahairbeauty
+          ref: main
+          token: ${{ env.SOURCE_PAT }}
+          path: app
+          persist-credentials: false
+
+      - name: Configura Node.js
+        if: steps.token.outputs.present == 'true'
+        uses: actions/setup-node@v4
         with:
           node-version: "24"
-      - name: Verifica secret hash e account Auth
+
+      - name: Installa Firebase CLI
+        if: steps.token.outputs.present == 'true'
+        working-directory: app/riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
+        run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Deploy sole regole Firestore con FIREBASE_TOKEN
+        if: steps.token.outputs.present == 'true'
+        working-directory: app/riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
         shell: bash
         run: |
           set -euo pipefail
-          [[ -n "${AUTH_HASH_CONFIG}" ]] || { echo "::error::FIREBASE_AUTH_HASH_CONFIG assente"; exit 1; }
-          mkdir -p "${RUNNER_TEMP}/auth-test" && cd "${RUNNER_TEMP}/auth-test"
-          npm init -y >/dev/null 2>&1
-          npm install firebase-admin@13 --no-audit --no-fund >/dev/null
-          cat > test.cjs <<'NODE'
-          const admin=require('firebase-admin');
-
-          function parseHashConfig(raw){
-            try { return JSON.parse(raw); } catch {}
-            const cfg={};
-            for(const key of ['algorithm','base64_signer_key','base64_salt_separator','rounds','mem_cost']){
-              const re=new RegExp(`${key}\\s*[:=]\\s*(?:"([^"]*)"|'([^']*)'|([^,\\s}]+))`,'i');
-              const m=String(raw).match(re);
-              if(m) cfg[key]=m[1] ?? m[2] ?? m[3];
-            }
-            if(cfg.rounds!==undefined) cfg.rounds=Number(cfg.rounds);
-            if(cfg.mem_cost!==undefined) cfg.mem_cost=Number(cfg.mem_cost);
-            return cfg;
-          }
-
-          const cfg=parseHashConfig(process.env.AUTH_HASH_CONFIG);
-          for(const k of ['algorithm','base64_signer_key','base64_salt_separator','rounds','mem_cost']) if(cfg[k]===undefined||cfg[k]===null||cfg[k]==='') throw new Error(`Parametro hash mancante: ${k}`);
-          const credentials=JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON);
-          admin.initializeApp({credential:admin.credential.cert(credentials),projectId:process.env.PROJECT_ID});
-          (async()=>{
-            let token,users=[],withHash=0;
-            do {
-              const page=await admin.auth().listUsers(1000,token);
-              users.push(...page.users);
-              token=page.pageToken;
-            } while(token);
-            for(const u of users) if(u.passwordHash && u.passwordSalt) withHash++;
-            console.log(`Authentication: ${users.length} account; hash password disponibili: ${withHash}.`);
-            console.log(`Configurazione hash riconosciuta: ${String(cfg.algorithm).toUpperCase()}; rounds=${Number(cfg.rounds)}; mem_cost=${Number(cfg.mem_cost)}.`);
-            if(users.some(u=>u.email) && withHash===0) console.log('::warning::Account leggibili, ma nessun passwordHash/passwordSalt visibile al service account.');
-          })().catch(e=>{console.error(e);process.exit(1)});
-          NODE
-          node test.cjs
+          ./node_modules/.bin/firebase deploy --project "${PROJECT_ID}" --only firestore:rules --token "${FIREBASE_TOKEN_VALUE}" --non-interactive
