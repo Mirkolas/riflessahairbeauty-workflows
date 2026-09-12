@@ -20,7 +20,6 @@ concurrency:
 
 env:
   PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID || vars.GCP_PROJECT_ID || 'riflessa-15a20' }}
-  REGISTRATORE_HOSTING_SITE: ${{ vars.REGISTRATORE_HOSTING_SITE || 'riflessa-15a20' }}
   SOURCE_REPOSITORY: ${{ vars.APP_REPOSITORY || 'Mirkolas/riflessahairbeauty' }}
   SOURCE_PAT: ${{ secrets.RIFLESSA_PAT || secrets.REPO_PAT || secrets.GH_PAT || secrets.PAT }}
   GOOGLE_CREDENTIALS_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_RIFLESSA_15A20 || secrets.FIREBASE_SERVICE_ACCOUNT || secrets.GCP_CREDENTIALS || secrets.GOOGLE_CREDENTIALS }}
@@ -37,12 +36,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           if [[ -z "${SOURCE_PAT}" ]]; then
             echo "::error::Manca il PAT con accesso in lettura alla repo dell'app."
             exit 1
           fi
-
           if [[ -z "${GOOGLE_CREDENTIALS_JSON}" && -z "${FIREBASE_TOKEN}" ]]; then
             echo "::error::Mancano credenziali Firebase/Google Cloud."
             exit 1
@@ -89,33 +86,6 @@ jobs:
         shell: bash
         run: npm run check
 
-      - name: Forza Hosting del registratore
-        working-directory: app/riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
-        shell: bash
-        run: |
-          set -euo pipefail
-          node <<'NODE'
-          const fs = require('fs');
-          const path = 'firebase.json';
-          const config = JSON.parse(fs.readFileSync(path, 'utf8'));
-          const site = process.env.REGISTRATORE_HOSTING_SITE;
-
-          if (!site) {
-            throw new Error('REGISTRATORE_HOSTING_SITE non configurato');
-          }
-
-          if (Array.isArray(config.hosting)) {
-            throw new Error('Configurazione hosting multipla non prevista per il registratore');
-          }
-
-          config.hosting = config.hosting || {};
-          delete config.hosting.target;
-          config.hosting.site = site;
-
-          fs.writeFileSync(path, JSON.stringify(config, null, 2) + '\n');
-          console.log(`Hosting registratore impostato sul sito Firebase: ${site}`);
-          NODE
-
       - name: Autenticazione Google Cloud
         if: env.GOOGLE_CREDENTIALS_JSON != ''
         uses: google-github-actions/auth@v2
@@ -129,16 +99,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           if [[ -n "${GOOGLE_CREDENTIALS_JSON}" ]]; then
             ./node_modules/.bin/firebase deploy \
               --project "${PROJECT_ID}" \
-              --only "firestore:rules,hosting" \
+              --only "firestore:rules,hosting:registratore" \
               --non-interactive
           else
             ./node_modules/.bin/firebase deploy \
               --project "${PROJECT_ID}" \
-              --only "firestore:rules,hosting" \
+              --only "firestore:rules,hosting:registratore" \
               --token "${FIREBASE_TOKEN}" \
               --non-interactive
           fi
