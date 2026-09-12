@@ -1,0 +1,48 @@
+name: Test dry-run ripristino registratore
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/_test-restore-dry-run.yml"
+
+permissions:
+  contents: read
+
+env:
+  PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID }}
+  SOURCE_PAT: ${{ secrets.PUBLIC_REPO_TOKEN }}
+  AUTH_HASH_CONFIG: ${{ secrets.FIREBASE_AUTH_HASH_CONFIG }}
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout script
+        uses: actions/checkout@v4
+        with:
+          path: workflow-src
+          persist-credentials: false
+
+      - name: Checkout backup privato
+        uses: actions/checkout@v4
+        with:
+          repository: Mirkolas/riflessahairbeauty
+          ref: main
+          token: ${{ env.SOURCE_PAT }}
+          path: app
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Verifica ultimo backup senza scrivere su Firebase
+        working-directory: app
+        shell: bash
+        run: |
+          set -euo pipefail
+          BACKUP_NAME="$(find backup-registratore -mindepth 1 -maxdepth 1 -type d -name 'backup-*' -printf '%f\n' | sort | tail -n 1)"
+          [[ -n "${BACKUP_NAME}" ]] || { echo "::error::Nessun backup trovato"; exit 1; }
+          BACKUP_PATH="${PWD}/backup-registratore/${BACKUP_NAME}" \
+            node "${GITHUB_WORKSPACE}/workflow-src/scripts/verifica-backup-registratore.cjs"
