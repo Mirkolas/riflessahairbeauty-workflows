@@ -1,4 +1,4 @@
-name: Corregge backup e responsive web
+name: Collega responsive web registratore
 
 on:
   push:
@@ -7,40 +7,12 @@ on:
       - ".github/workflows/_repair-backup-responsive.yml"
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   repair:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout workflow repo
-        uses: actions/checkout@v4
-        with:
-          path: workflows
-          persist-credentials: true
-
-      - name: Correggi sintassi backup
-        working-directory: workflows
-        shell: bash
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          from pathlib import Path
-          p=Path('.github/workflows/firebase-backup-registratore.yml')
-          s=p.read_text()
-          old='''              node -e "const m=require('./${LOCAL_DIR}/manifest.json');'''
-          new='''              if node -e "const m=require('./${LOCAL_DIR}/manifest.json');'''
-          if old not in s:
-              raise SystemExit('Blocco backup da correggere non trovato')
-          s=s.replace(old,new,1)
-          p.write_text(s)
-          PY
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add .github/workflows/firebase-backup-registratore.yml
-          git commit -m "Corregge sintassi backup completo registratore"
-          git push origin HEAD:main
-
       - name: Checkout app privata
         uses: actions/checkout@v4
         with:
