@@ -1,0 +1,67 @@
+name: Collega log sync e deploy registratore
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/_patch-log-sync-and-deploy.yml"
+
+permissions:
+  contents: read
+  actions: write
+
+env:
+  SOURCE_PAT: ${{ secrets.PUBLIC_REPO_TOKEN }}
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout app privata
+        uses: actions/checkout@v4
+        with:
+          repository: Mirkolas/riflessahairbeauty
+          ref: main
+          token: ${{ env.SOURCE_PAT }}
+          path: app
+          persist-credentials: true
+
+      - name: Collega sincronizzazione log
+        working-directory: app
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions/js/app.js')
+          s = p.read_text()
+          line = 'import("./log-sync.js").catch(error => console.warn("Avvio sincronizzazione log non riuscito:", error?.message || error));'
+          if line not in s:
+              marker = 'const db = getFirestore(firebaseApp);'
+              if marker not in s:
+                  raise SystemExit('Marker Firebase non trovato')
+              s = s.replace(marker, marker + '\n' + line, 1)
+              p.write_text(s)
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions/js/app.js
+          if git diff --cached --quiet; then
+            echo "Log sync già collegato."
+          else
+            git commit -m "Attiva sincronizzazione log registratore"
+            git push origin HEAD:main
+          fi
+
+      - name: Avvia deploy definitivo
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'firebase-deploy-registratore.yml',
+              ref: 'main',
+              inputs: { ref: 'main' }
+            });
+            console.log('Deploy registratore avviato dopo collegamento log sync.');
