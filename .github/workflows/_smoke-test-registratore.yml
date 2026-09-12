@@ -1,0 +1,105 @@
+name: Smoke test registratore
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/_smoke-test-registratore.yml"
+
+permissions:
+  contents: read
+
+env:
+  PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID }}
+  HOSTING_TARGET: ${{ vars.FIREBASE_HOSTING_TARGET }}
+  SOURCE_PAT: ${{ secrets.PUBLIC_REPO_TOKEN }}
+  GOOGLE_CREDENTIALS_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+
+jobs:
+  test:
+    name: Test integrazione registratore
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Verifica configurazione
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "${PROJECT_ID}" ]] || { echo "::error::FIREBASE_PROJECT_ID assente"; exit 1; }
+          [[ "${HOSTING_TARGET}" == "registratore" ]] || { echo "::error::FIREBASE_HOSTING_TARGET non e registratore"; exit 1; }
+          [[ -n "${SOURCE_PAT}" ]] || { echo "::error::PUBLIC_REPO_TOKEN assente"; exit 1; }
+          [[ -n "${GOOGLE_CREDENTIALS_JSON}" ]] || { echo "::error::FIREBASE_SERVICE_ACCOUNT assente"; exit 1; }
+
+      - name: Checkout repo privata con PAT
+        uses: actions/checkout@v4
+        with:
+          repository: Mirkolas/riflessahairbeauty
+          ref: main
+          token: ${{ env.SOURCE_PAT }}
+          path: app
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verifica mapping Firebase registratore
+        working-directory: app/riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
+        shell: bash
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const fs = require('fs');
+          const rc = JSON.parse(fs.readFileSync('.firebaserc', 'utf8'));
+          const cfg = JSON.parse(fs.readFileSync('firebase.json', 'utf8'));
+          const project = process.env.PROJECT_ID;
+          const target = process.env.HOSTING_TARGET;
+          const mapped = rc.targets?.[project]?.hosting?.[target] || [];
+          if (cfg.hosting?.target !== target) throw new Error('firebase.json non usa il target configurato');
+          if (!mapped.includes('riflessa-15a20')) throw new Error('target registratore non mappa al sito riflessa-15a20');
+          console.log('Mapping target registratore: OK');
+          NODE
+
+      - name: Autenticazione Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ env.GOOGLE_CREDENTIALS_JSON }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Installa Google Cloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Verifica accesso Firestore
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud firestore databases describe \
+            --database='(default)' \
+            --project="${PROJECT_ID}" \
+            --format='value(name)' >/dev/null
+          echo "Accesso Firestore: OK"
+
+      - name: Verifica sito Firebase Hosting
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx --yes firebase-tools@13.20.0 hosting:sites:list \
+            --project "${PROJECT_ID}" \
+            --json > sites.json
+          node - <<'NODE'
+          const fs = require('fs');
+          const data = JSON.parse(fs.readFileSync('sites.json', 'utf8'));
+          const rows = Array.isArray(data.result) ? data.result : (data.result?.sites || []);
+          const found = rows.some(x => x.name === 'riflessa-15a20' || x.site === 'riflessa-15a20' || String(x.defaultUrl || '').includes('riflessa-15a20'));
+          if (!found) throw new Error('Sito Firebase Hosting riflessa-15a20 non trovato');
+          console.log('Firebase Hosting riflessa-15a20: OK');
+          NODE
+
+      - name: Test progetto applicativo
+        working-directory: app/riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --ignore-scripts --no-audit --no-fund
+          npm test
+          npm run check
