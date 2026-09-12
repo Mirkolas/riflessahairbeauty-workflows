@@ -30,10 +30,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          [[ -n "${PROJECT_ID}" ]] || { echo "::error::Manca la Variable FIREBASE_PROJECT_ID."; exit 1; }
-          [[ -n "${GOOGLE_CREDENTIALS_JSON}" ]] || { echo "::error::Manca il Secret FIREBASE_SERVICE_ACCOUNT."; exit 1; }
-          [[ -n "${SOURCE_PAT}" ]] || { echo "::error::Manca il Secret PUBLIC_REPO_TOKEN."; exit 1; }
-          [[ -n "${AUTH_HASH_CONFIG}" ]] || { echo "::error::Manca il Secret FIREBASE_AUTH_HASH_CONFIG."; exit 1; }
+          [[ -n "${PROJECT_ID}" ]] || { echo "::error::Manca FIREBASE_PROJECT_ID."; exit 1; }
+          [[ -n "${GOOGLE_CREDENTIALS_JSON}" ]] || { echo "::error::Manca FIREBASE_SERVICE_ACCOUNT."; exit 1; }
+          [[ -n "${SOURCE_PAT}" ]] || { echo "::error::Manca PUBLIC_REPO_TOKEN."; exit 1; }
+          [[ -n "${AUTH_HASH_CONFIG}" ]] || { echo "::error::Manca FIREBASE_AUTH_HASH_CONFIG."; exit 1; }
+
+      - name: Checkout workflow e script
+        uses: actions/checkout@v4
+        with:
+          path: workflow-src
+          persist-credentials: false
 
       - name: Checkout repo privata backup
         uses: actions/checkout@v4
@@ -55,218 +61,14 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/registratore-backup-tool"
-          cd "${RUNNER_TEMP}/registratore-backup-tool"
-          npm init -y >/dev/null 2>&1
-          npm install firebase-admin@13 --no-audit --no-fund >/dev/null
-
-      - name: Prepara esportatore completo
-        shell: bash
-        run: |
-          cat > "${RUNNER_TEMP}/registratore-backup-tool/export.cjs" <<'NODE'
-          const fs = require('fs');
-          const path = require('path');
-          const crypto = require('crypto');
-          const admin = require('firebase-admin');
-
-          const OUTPUT_DIR = process.env.OUTPUT_DIR;
-          const PART_LIMIT = 15 * 1024 * 1024;
-          fs.mkdirSync(OUTPUT_DIR, { recursive: true });
-          fs.mkdirSync(path.join(OUTPUT_DIR, 'firestore'), { recursive: true });
-
-          function parseHashConfig(raw) {
-            try { return JSON.parse(raw); } catch {}
-            const cfg = {};
-            for (const key of ['algorithm','base64_signer_key','base64_salt_separator','rounds','mem_cost']) {
-              const re = new RegExp(`${key}\\s*[:=]\\s*(?:"([^"]*)"|'([^']*)'|([^,\\s}]+))`, 'i');
-              const m = String(raw).match(re);
-              if (m) cfg[key] = m[1] ?? m[2] ?? m[3];
-            }
-            if (cfg.rounds !== undefined) cfg.rounds = Number(cfg.rounds);
-            if (cfg.mem_cost !== undefined) cfg.mem_cost = Number(cfg.mem_cost);
-            return cfg;
-          }
-
-          function normalizedHashConfig(raw) {
-            const cfg = parseHashConfig(raw);
-            for (const key of ['algorithm','base64_signer_key','base64_salt_separator','rounds','mem_cost']) {
-              if (cfg[key] === undefined || cfg[key] === null || cfg[key] === '') throw new Error(`Parametro hash mancante: ${key}`);
-            }
-            return {
-              algorithm: String(cfg.algorithm).toUpperCase(),
-              base64_signer_key: String(cfg.base64_signer_key),
-              base64_salt_separator: String(cfg.base64_salt_separator),
-              rounds: Number(cfg.rounds),
-              mem_cost: Number(cfg.mem_cost)
-            };
-          }
-
-          const credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON);
-          admin.initializeApp({ credential: admin.credential.cert(credentials), projectId: process.env.PROJECT_ID });
-          const db = admin.firestore();
-
-          function encode(value) {
-            if (value === null || value === undefined) return value ?? null;
-            if (value instanceof admin.firestore.Timestamp) return { __firestoreType: 'timestamp', seconds: value.seconds, nanoseconds: value.nanoseconds };
-            if (value instanceof admin.firestore.GeoPoint) return { __firestoreType: 'geopoint', latitude: value.latitude, longitude: value.longitude };
-            if (value instanceof admin.firestore.DocumentReference) return { __firestoreType: 'reference', path: value.path };
-            if (Buffer.isBuffer(value) || value instanceof Uint8Array) return { __firestoreType: 'bytes', base64: Buffer.from(value).toString('base64') };
-            if (Array.isArray(value)) return value.map(encode);
-            if (typeof value === 'object') {
-              const out = {};
-              for (const [k, v] of Object.entries(value)) out[k] = encode(v);
-              return out;
-            }
-            return value;
-          }
-
-          let partNo = 1;
-          let partBytes = 0;
-          let partLines = [];
-          let documentCount = 0;
-          let logDocumentCount = 0;
-          const rootCollections = new Set();
-          const partFiles = [];
-
-          function flushPart() {
-            if (!partLines.length) return;
-            const name = `part-${String(partNo).padStart(4, '0')}.jsonl`;
-            fs.writeFileSync(path.join(OUTPUT_DIR, 'firestore', name), partLines.join(''), 'utf8');
-            partFiles.push(name);
-            partNo += 1;
-            partBytes = 0;
-            partLines = [];
-          }
-
-          function appendDocument(item) {
-            const line = JSON.stringify(item) + '\n';
-            const bytes = Buffer.byteLength(line);
-            if (partLines.length && partBytes + bytes > PART_LIMIT) flushPart();
-            partLines.push(line);
-            partBytes += bytes;
-            documentCount += 1;
-            const root = item.path.split('/')[0];
-            rootCollections.add(root);
-            if (root === 'registratoreLogFiles') logDocumentCount += 1;
-          }
-
-          async function walkCollection(collectionRef) {
-            const snapshot = await collectionRef.get();
-            for (const document of snapshot.docs) {
-              appendDocument({ path: document.ref.path, data: encode(document.data()) });
-              const subcollections = await document.ref.listCollections();
-              for (const subcollection of subcollections) await walkCollection(subcollection);
-            }
-          }
-
-          function serializeUser(user) {
-            return {
-              uid: user.uid,
-              email: user.email || null,
-              emailVerified: !!user.emailVerified,
-              displayName: user.displayName || null,
-              photoURL: user.photoURL || null,
-              phoneNumber: user.phoneNumber || null,
-              disabled: !!user.disabled,
-              customClaims: user.customClaims || null,
-              tenantId: user.tenantId || null,
-              providerData: (user.providerData || []).map(p => ({
-                uid: p.uid || null,
-                displayName: p.displayName || null,
-                email: p.email || null,
-                photoURL: p.photoURL || null,
-                providerId: p.providerId || null,
-                phoneNumber: p.phoneNumber || null
-              })),
-              metadata: {
-                creationTime: user.metadata?.creationTime || null,
-                lastSignInTime: user.metadata?.lastSignInTime || null,
-                lastRefreshTime: user.metadata?.lastRefreshTime || null
-              },
-              passwordHash: user.passwordHash ? Buffer.from(user.passwordHash).toString('base64') : null,
-              passwordSalt: user.passwordSalt ? Buffer.from(user.passwordSalt).toString('base64') : null,
-              tokensValidAfterTime: user.tokensValidAfterTime || null
-            };
-          }
-
-          function encryptAuth(payload, hashCfg) {
-            const canonical = JSON.stringify(hashCfg);
-            const key = crypto.createHash('sha256').update(canonical).digest();
-            const fingerprint = crypto.createHash('sha256').update(canonical).digest('hex');
-            const iv = crypto.randomBytes(12);
-            const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
-            const plaintext = Buffer.from(JSON.stringify(payload), 'utf8');
-            const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
-            const tag = cipher.getAuthTag();
-            return {
-              format: 'riflessa-firebase-auth-aes256gcm-v1',
-              configFingerprint: fingerprint,
-              iv: iv.toString('base64'),
-              authTag: tag.toString('base64'),
-              ciphertext: ciphertext.toString('base64'),
-              accountCount: payload.users.length,
-              hashedPasswordCount: payload.users.filter(u => u.passwordHash && u.passwordSalt).length
-            };
-          }
-
-          async function exportAuth() {
-            const users = [];
-            let pageToken;
-            do {
-              const page = await admin.auth().listUsers(1000, pageToken);
-              users.push(...page.users.map(serializeUser));
-              pageToken = page.pageToken;
-            } while (pageToken);
-
-            const payload = {
-              format: 'riflessa-firebase-auth-v1',
-              projectId: process.env.PROJECT_ID,
-              createdAt: new Date().toISOString(),
-              users
-            };
-            const hashCfg = normalizedHashConfig(process.env.AUTH_HASH_CONFIG);
-            const encrypted = encryptAuth(payload, hashCfg);
-            fs.writeFileSync(path.join(OUTPUT_DIR, 'authentication.enc.json'), JSON.stringify(encrypted, null, 2) + '\n');
-            return { accountCount: users.length, hashedPasswordCount: encrypted.hashedPasswordCount, hashAlgorithm: hashCfg.algorithm };
-          }
-
-          async function main() {
-            const roots = await db.listCollections();
-            for (const collection of roots) await walkCollection(collection);
-            flushPart();
-
-            const firestoreManifest = {
-              format: 'riflessa-firestore-jsonl-v2',
-              projectId: process.env.PROJECT_ID,
-              databaseId: '(default)',
-              createdAt: new Date().toISOString(),
-              documentCount,
-              logDocumentCount,
-              rootCollections: [...rootCollections].sort(),
-              parts: partFiles
-            };
-            fs.writeFileSync(path.join(OUTPUT_DIR, 'firestore', 'manifest.json'), JSON.stringify(firestoreManifest, null, 2) + '\n');
-
-            const auth = await exportAuth();
-            const overall = {
-              format: 'riflessa-registratore-backup-v2',
-              projectId: process.env.PROJECT_ID,
-              createdAt: new Date().toISOString(),
-              sourceCommit: process.env.SOURCE_COMMIT || null,
-              firestore: firestoreManifest,
-              authentication: auth
-            };
-            fs.writeFileSync(path.join(OUTPUT_DIR, 'manifest.json'), JSON.stringify(overall, null, 2) + '\n');
-            console.log(`Firestore: ${documentCount} documenti (${logDocumentCount} documenti log).`);
-            console.log(`Authentication: ${auth.accountCount} account (${auth.hashedPasswordCount} con hash password).`);
-          }
-
-          main().catch(error => { console.error(error); process.exit(1); });
-          NODE
+          npm install --prefix "${RUNNER_TEMP}/registratore-backup-tool" firebase-admin@13 --no-audit --no-fund >/dev/null
 
       - name: Crea backup completo con massimo 5 tentativi
         id: backup
         working-directory: backup-repo
         shell: bash
+        env:
+          NODE_PATH: ${{ runner.temp }}/registratore-backup-tool/node_modules
         run: |
           set -uo pipefail
           git config user.name "github-actions[bot]"
@@ -275,6 +77,7 @@ jobs:
           SUCCESS=0
           FINAL_BACKUP=""
           APP_DIR="riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions"
+          EXPORTER="${GITHUB_WORKSPACE}/workflow-src/scripts/backup-registratore.cjs"
 
           for ATTEMPT in 1 2 3 4 5; do
             echo "Tentativo backup completo ${ATTEMPT}/5"
@@ -288,7 +91,7 @@ jobs:
             LOCAL_DIR="backup-registratore/${BACKUP_NAME}"
             mkdir -p "${LOCAL_DIR}/app-config/config" "${LOCAL_DIR}/app-config/js"
 
-            if OUTPUT_DIR="${PWD}/${LOCAL_DIR}" SOURCE_COMMIT="${SOURCE_COMMIT}" node "${RUNNER_TEMP}/registratore-backup-tool/export.cjs"; then
+            if OUTPUT_DIR="${PWD}/${LOCAL_DIR}" SOURCE_COMMIT="${SOURCE_COMMIT}" node "${EXPORTER}"; then
               cp "${APP_DIR}/.firebaserc" "${LOCAL_DIR}/app-config/.firebaserc"
               cp "${APP_DIR}/firebase.json" "${LOCAL_DIR}/app-config/firebase.json"
               cp "${APP_DIR}/firestore.rules" "${LOCAL_DIR}/app-config/firestore.rules"
@@ -297,16 +100,16 @@ jobs:
               cp "${APP_DIR}/js/firebase-config.js" "${LOCAL_DIR}/app-config/js/firebase-config.js"
               printf '%s\n' "${SOURCE_COMMIT}" > "${LOCAL_DIR}/SOURCE_COMMIT.txt"
 
-              node -e "const m=require('./${LOCAL_DIR}/manifest.json'); if(m.format!=='riflessa-registratore-backup-v2'||!m.firestore?.documentCount&&m.firestore?.documentCount!==0||m.authentication?.accountCount===undefined) process.exit(1); console.log('Manifest backup verificato.');" \
-              && node -e "const a=require('./${LOCAL_DIR}/authentication.enc.json'); if(a.format!=='riflessa-firebase-auth-aes256gcm-v1'||!a.ciphertext||!a.authTag) process.exit(1); console.log('Backup Authentication cifrato verificato.');" \
-              && test -f "${LOCAL_DIR}/firestore/manifest.json"; then
+              if node -e "const m=require('./${LOCAL_DIR}/manifest.json'); if(m.format!=='riflessa-registratore-backup-v2'||m.firestore?.documentCount===undefined||m.authentication?.accountCount===undefined) process.exit(1); console.log('Manifest backup verificato.');" \
+                && node -e "const a=require('./${LOCAL_DIR}/authentication.enc.json'); if(a.format!=='riflessa-firebase-auth-aes256gcm-v1'||!a.ciphertext||!a.authTag) process.exit(1); console.log('Authentication cifrata verificata.');" \
+                && test -f "${LOCAL_DIR}/firestore/manifest.json"; then
 
                 cat > "${LOCAL_DIR}/BACKUP_INFO.txt" <<EOF
           Backup completo registratore
           Data UTC: ${TIMESTAMP}
           Progetto: ${PROJECT_ID}
           Commit applicazione: ${SOURCE_COMMIT}
-          Contenuto: Firestore completo, Authentication cifrata, log registratore sincronizzati in Firestore, configurazione applicazione.
+          Contenuto: Firestore completo, Authentication cifrata con hash password, log registratore sincronizzati, configurazione applicazione.
           Tentativo riuscito: ${ATTEMPT}/5
           EOF
 
@@ -340,6 +143,7 @@ jobs:
             echo "::error::Backup completo non creato dopo 5 tentativi."
             exit 1
           fi
+
           echo "backup_name=${FINAL_BACKUP}" >> "${GITHUB_OUTPUT}"
 
       - name: Riepilogo
