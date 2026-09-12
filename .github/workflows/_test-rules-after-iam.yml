@@ -1,0 +1,55 @@
+name: Test Firebase Rules dopo IAM
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/_test-rules-after-iam.yml"
+
+permissions:
+  contents: read
+
+env:
+  PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID }}
+  SOURCE_PAT: ${{ secrets.PUBLIC_REPO_TOKEN }}
+  GOOGLE_CREDENTIALS_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout app privata
+        uses: actions/checkout@v4
+        with:
+          repository: Mirkolas/riflessahairbeauty
+          ref: main
+          token: ${{ env.SOURCE_PAT }}
+          path: app
+          persist-credentials: false
+
+      - name: Configura Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Installa dipendenze
+        working-directory: app/riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
+        run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Autenticazione Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ env.GOOGLE_CREDENTIALS_JSON }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Pubblica Firestore Rules
+        working-directory: app/riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./node_modules/.bin/firebase deploy \
+            --project "${PROJECT_ID}" \
+            --only firestore:rules \
+            --non-interactive
