@@ -1,4 +1,4 @@
-name: Diagnostica configurazione registratore
+name: Diagnostica PAT registratore
 
 on:
   push:
@@ -11,97 +11,18 @@ permissions:
 
 jobs:
   discover:
-    name: Verifica nomi configurati senza esporre valori
+    name: Verifica nome PAT senza esporre valori
     runs-on: ubuntu-latest
     steps:
-      - name: Cerca secret Firebase service account
+      - name: Cerca PAT configurato
         shell: bash
         env:
-          S1: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_RIFLESSA_15A20 }}
-          S2: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-          S3: ${{ secrets.FIREBASE_CREDENTIALS }}
-          S4: ${{ secrets.GCP_CREDENTIALS }}
-          S5: ${{ secrets.GOOGLE_CREDENTIALS }}
-          S6: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
+          P1: ${{ secrets.PAT_GITHUB }}
+          P2: ${{ secrets.TOKEN_GITHUB }}
+          P3: ${{ secrets.PAT_RIFLESSA }}
+          P4: ${{ secrets.RIFLESSA_TOKEN }}
         run: |
-          [[ -n "$S1" ]] && echo "FOUND_SECRET=FIREBASE_SERVICE_ACCOUNT_RIFLESSA_15A20" || true
-          [[ -n "$S2" ]] && echo "FOUND_SECRET=FIREBASE_SERVICE_ACCOUNT" || true
-          [[ -n "$S3" ]] && echo "FOUND_SECRET=FIREBASE_CREDENTIALS" || true
-          [[ -n "$S4" ]] && echo "FOUND_SECRET=GCP_CREDENTIALS" || true
-          [[ -n "$S5" ]] && echo "FOUND_SECRET=GOOGLE_CREDENTIALS" || true
-          [[ -n "$S6" ]] && echo "FOUND_SECRET=GOOGLE_APPLICATION_CREDENTIALS" || true
-
-      - name: Cerca secret PAT
-        shell: bash
-        env:
-          P1: ${{ secrets.RIFLESSA_PAT }}
-          P2: ${{ secrets.REPO_PAT }}
-          P3: ${{ secrets.GH_PAT }}
-          P4: ${{ secrets.PAT }}
-          P5: ${{ secrets.GITHUB_PAT }}
-          P6: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
-        run: |
-          [[ -n "$P1" ]] && echo "FOUND_SECRET=RIFLESSA_PAT" || true
-          [[ -n "$P2" ]] && echo "FOUND_SECRET=REPO_PAT" || true
-          [[ -n "$P3" ]] && echo "FOUND_SECRET=GH_PAT" || true
-          [[ -n "$P4" ]] && echo "FOUND_SECRET=PAT" || true
-          [[ -n "$P5" ]] && echo "FOUND_SECRET=GITHUB_PAT" || true
-          [[ -n "$P6" ]] && echo "FOUND_SECRET=PERSONAL_ACCESS_TOKEN" || true
-
-      - name: Cerca eventuale Firebase token
-        shell: bash
-        env:
-          T1: ${{ secrets.FIREBASE_TOKEN }}
-          T2: ${{ secrets.FIREBASE_CI_TOKEN }}
-        run: |
-          [[ -n "$T1" ]] && echo "FOUND_SECRET=FIREBASE_TOKEN" || true
-          [[ -n "$T2" ]] && echo "FOUND_SECRET=FIREBASE_CI_TOKEN" || true
-
-      - name: Variable FIREBASE_PROJECT_ID
-        if: ${{ vars.FIREBASE_PROJECT_ID != '' }}
-        run: echo "FOUND_VAR=FIREBASE_PROJECT_ID"
-      - name: Variable GCP_PROJECT_ID
-        if: ${{ vars.GCP_PROJECT_ID != '' }}
-        run: echo "FOUND_VAR=GCP_PROJECT_ID"
-      - name: Variable PROJECT_ID
-        if: ${{ vars.PROJECT_ID != '' }}
-        run: echo "FOUND_VAR=PROJECT_ID"
-
-      - name: Variable FIRESTORE_BACKUP_BUCKET
-        if: ${{ vars.FIRESTORE_BACKUP_BUCKET != '' }}
-        run: echo "FOUND_VAR=FIRESTORE_BACKUP_BUCKET"
-      - name: Variable BACKUP_BUCKET
-        if: ${{ vars.BACKUP_BUCKET != '' }}
-        run: echo "FOUND_VAR=BACKUP_BUCKET"
-      - name: Variable FIREBASE_STORAGE_BUCKET
-        if: ${{ vars.FIREBASE_STORAGE_BUCKET != '' }}
-        run: echo "FOUND_VAR=FIREBASE_STORAGE_BUCKET"
-
-      - name: Variable APP_REPOSITORY
-        if: ${{ vars.APP_REPOSITORY != '' }}
-        run: echo "FOUND_VAR=APP_REPOSITORY"
-      - name: Variable SOURCE_REPOSITORY
-        if: ${{ vars.SOURCE_REPOSITORY != '' }}
-        run: echo "FOUND_VAR=SOURCE_REPOSITORY"
-      - name: Variable PRIVATE_REPOSITORY
-        if: ${{ vars.PRIVATE_REPOSITORY != '' }}
-        run: echo "FOUND_VAR=PRIVATE_REPOSITORY"
-      - name: Variable REPO_APP
-        if: ${{ vars.REPO_APP != '' }}
-        run: echo "FOUND_VAR=REPO_APP"
-
-      - name: Variable FIREBASE_TARGET
-        if: ${{ vars.FIREBASE_TARGET != '' }}
-        run: echo "FOUND_VAR=FIREBASE_TARGET"
-      - name: Variable FIREBASE_HOSTING_TARGET
-        if: ${{ vars.FIREBASE_HOSTING_TARGET != '' }}
-        run: echo "FOUND_VAR=FIREBASE_HOSTING_TARGET"
-      - name: Variable HOSTING_TARGET
-        if: ${{ vars.HOSTING_TARGET != '' }}
-        run: echo "FOUND_VAR=HOSTING_TARGET"
-      - name: Variable REGISTRATORE_HOSTING_SITE
-        if: ${{ vars.REGISTRATORE_HOSTING_SITE != '' }}
-        run: echo "FOUND_VAR=REGISTRATORE_HOSTING_SITE"
-      - name: Variable FIREBASE_HOSTING_SITE
-        if: ${{ vars.FIREBASE_HOSTING_SITE != '' }}
-        run: echo "FOUND_VAR=FIREBASE_HOSTING_SITE"
+          [[ -n "$P1" ]] && echo "FOUND_SECRET=PAT_GITHUB" || true
+          [[ -n "$P2" ]] && echo "FOUND_SECRET=TOKEN_GITHUB" || true
+          [[ -n "$P3" ]] && echo "FOUND_SECRET=PAT_RIFLESSA" || true
+          [[ -n "$P4" ]] && echo "FOUND_SECRET=RIFLESSA_TOKEN" || true
