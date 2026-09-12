@@ -31,25 +31,35 @@ jobs:
           npm install firebase-admin@13 --no-audit --no-fund >/dev/null
           cat > test.cjs <<'NODE'
           const admin=require('firebase-admin');
-          const cfg=JSON.parse(process.env.AUTH_HASH_CONFIG);
+
+          function parseHashConfig(raw){
+            try { return JSON.parse(raw); } catch {}
+            const cfg={};
+            for(const key of ['algorithm','base64_signer_key','base64_salt_separator','rounds','mem_cost']){
+              const re=new RegExp(`${key}\\s*[:=]\\s*(?:"([^"]*)"|'([^']*)'|([^,\\s}]+))`,'i');
+              const m=String(raw).match(re);
+              if(m) cfg[key]=m[1] ?? m[2] ?? m[3];
+            }
+            if(cfg.rounds!==undefined) cfg.rounds=Number(cfg.rounds);
+            if(cfg.mem_cost!==undefined) cfg.mem_cost=Number(cfg.mem_cost);
+            return cfg;
+          }
+
+          const cfg=parseHashConfig(process.env.AUTH_HASH_CONFIG);
           for(const k of ['algorithm','base64_signer_key','base64_salt_separator','rounds','mem_cost']) if(cfg[k]===undefined||cfg[k]===null||cfg[k]==='') throw new Error(`Parametro hash mancante: ${k}`);
           const credentials=JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON);
           admin.initializeApp({credential:admin.credential.cert(credentials),projectId:process.env.PROJECT_ID});
           (async()=>{
-            let token,users=[],withPassword=0,withHash=0;
+            let token,users=[],withHash=0;
             do {
               const page=await admin.auth().listUsers(1000,token);
               users.push(...page.users);
               token=page.pageToken;
             } while(token);
-            for(const u of users){
-              const passwordProvider=(u.providerData||[]).some(p=>p.providerId==='password') || !!u.email;
-              if(passwordProvider) withPassword++;
-              if(u.passwordHash && u.passwordSalt) withHash++;
-            }
+            for(const u of users) if(u.passwordHash && u.passwordSalt) withHash++;
             console.log(`Authentication: ${users.length} account; hash password disponibili: ${withHash}.`);
-            console.log(`Configurazione hash: ${cfg.algorithm}; rounds=${Number(cfg.rounds)}; mem_cost=${Number(cfg.mem_cost)}.`);
-            if(withPassword>0 && withHash===0) console.log('::warning::Gli account sono leggibili ma il service account non espone passwordHash/passwordSalt; il backup Auth non sarebbe completo per le password.');
+            console.log(`Configurazione hash riconosciuta: ${String(cfg.algorithm).toUpperCase()}; rounds=${Number(cfg.rounds)}; mem_cost=${Number(cfg.mem_cost)}.`);
+            if(users.some(u=>u.email) && withHash===0) console.log('::warning::Account leggibili, ma nessun passwordHash/passwordSalt visibile al service account.');
           })().catch(e=>{console.error(e);process.exit(1)});
           NODE
           node test.cjs
