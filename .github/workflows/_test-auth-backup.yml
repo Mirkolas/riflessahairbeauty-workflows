@@ -1,0 +1,55 @@
+name: Test Firebase Authentication backup
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/_test-auth-backup.yml"
+
+permissions:
+  contents: read
+
+env:
+  PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID }}
+  GOOGLE_CREDENTIALS_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+  AUTH_HASH_CONFIG: ${{ secrets.FIREBASE_AUTH_HASH_CONFIG }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Verifica secret hash e account Auth
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "${AUTH_HASH_CONFIG}" ]] || { echo "::error::FIREBASE_AUTH_HASH_CONFIG assente"; exit 1; }
+          mkdir -p "${RUNNER_TEMP}/auth-test" && cd "${RUNNER_TEMP}/auth-test"
+          npm init -y >/dev/null 2>&1
+          npm install firebase-admin@13 --no-audit --no-fund >/dev/null
+          cat > test.cjs <<'NODE'
+          const admin=require('firebase-admin');
+          const cfg=JSON.parse(process.env.AUTH_HASH_CONFIG);
+          for(const k of ['algorithm','base64_signer_key','base64_salt_separator','rounds','mem_cost']) if(cfg[k]===undefined||cfg[k]===null||cfg[k]==='') throw new Error(`Parametro hash mancante: ${k}`);
+          const credentials=JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON);
+          admin.initializeApp({credential:admin.credential.cert(credentials),projectId:process.env.PROJECT_ID});
+          (async()=>{
+            let token,users=[],withPassword=0,withHash=0;
+            do {
+              const page=await admin.auth().listUsers(1000,token);
+              users.push(...page.users);
+              token=page.pageToken;
+            } while(token);
+            for(const u of users){
+              const passwordProvider=(u.providerData||[]).some(p=>p.providerId==='password') || !!u.email;
+              if(passwordProvider) withPassword++;
+              if(u.passwordHash && u.passwordSalt) withHash++;
+            }
+            console.log(`Authentication: ${users.length} account; hash password disponibili: ${withHash}.`);
+            console.log(`Configurazione hash: ${cfg.algorithm}; rounds=${Number(cfg.rounds)}; mem_cost=${Number(cfg.mem_cost)}.`);
+            if(withPassword>0 && withHash===0) console.log('::warning::Gli account sono leggibili ma il service account non espone passwordHash/passwordSalt; il backup Auth non sarebbe completo per le password.');
+          })().catch(e=>{console.error(e);process.exit(1)});
+          NODE
+          node test.cjs
