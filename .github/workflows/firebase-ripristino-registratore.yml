@@ -21,12 +21,12 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID || vars.GCP_PROJECT_ID || 'riflessa-15a20' }}
+  PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID }}
   DATABASE_ID: "(default)"
-  BACKUP_BUCKET: ${{ vars.FIRESTORE_BACKUP_BUCKET || vars.BACKUP_BUCKET || 'riflessa-15a20-firestore-backups' }}
-  BACKUP_REPOSITORY: ${{ vars.APP_REPOSITORY || 'Mirkolas/riflessahairbeauty' }}
-  SOURCE_PAT: ${{ secrets.RIFLESSA_PAT || secrets.REPO_PAT || secrets.GH_PAT || secrets.PAT }}
-  GOOGLE_CREDENTIALS_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_RIFLESSA_15A20 || secrets.FIREBASE_SERVICE_ACCOUNT || secrets.GCP_CREDENTIALS || secrets.GOOGLE_CREDENTIALS }}
+  BACKUP_BUCKET: ${{ vars.FIREBASE_PROJECT_ID }}-firestore-backups
+  BACKUP_REPOSITORY: Mirkolas/riflessahairbeauty
+  SOURCE_PAT: ${{ secrets.PUBLIC_REPO_TOKEN }}
+  GOOGLE_CREDENTIALS_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
 
 jobs:
   restore:
@@ -41,18 +41,10 @@ jobs:
           CONFIRMATION: ${{ inputs.conferma }}
         run: |
           set -euo pipefail
-          if [[ "${CONFIRMATION}" != "RIPRISTINA" ]]; then
-            echo "::error::Conferma non valida. Scrivere esattamente RIPRISTINA."
-            exit 1
-          fi
-          if [[ -z "${GOOGLE_CREDENTIALS_JSON}" ]]; then
-            echo "::error::Manca il secret con le credenziali Google/Firebase."
-            exit 1
-          fi
-          if [[ -z "${SOURCE_PAT}" ]]; then
-            echo "::error::Manca il PAT per leggere la repo privata dei backup."
-            exit 1
-          fi
+          [[ "${CONFIRMATION}" == "RIPRISTINA" ]] || { echo "::error::Conferma non valida. Scrivere esattamente RIPRISTINA."; exit 1; }
+          [[ -n "${PROJECT_ID}" ]] || { echo "::error::Manca la Variable FIREBASE_PROJECT_ID."; exit 1; }
+          [[ -n "${GOOGLE_CREDENTIALS_JSON}" ]] || { echo "::error::Manca il Secret FIREBASE_SERVICE_ACCOUNT."; exit 1; }
+          [[ -n "${SOURCE_PAT}" ]] || { echo "::error::Manca il Secret PUBLIC_REPO_TOKEN."; exit 1; }
 
       - name: Checkout repo privata backup
         uses: actions/checkout@v4
@@ -74,30 +66,16 @@ jobs:
           set -euo pipefail
 
           if [[ -n "${REQUESTED_BACKUP}" ]]; then
-            if [[ ! "${REQUESTED_BACKUP}" =~ ^backup-[0-9]{8}-[0-9]{6}$ ]]; then
-              echo "::error::Nome backup non valido."
-              exit 1
-            fi
+            [[ "${REQUESTED_BACKUP}" =~ ^backup-[0-9]{8}-[0-9]{6}$ ]] || { echo "::error::Nome backup non valido."; exit 1; }
             BACKUP_NAME="${REQUESTED_BACKUP}"
           else
             BACKUP_NAME="$(find backup-registratore -mindepth 1 -maxdepth 1 -type d -name 'backup-*' -printf '%f\n' 2>/dev/null | sort | tail -n 1)"
           fi
 
-          if [[ -z "${BACKUP_NAME}" ]]; then
-            echo "::error::Nessun backup disponibile in backup-registratore/."
-            exit 1
-          fi
-
+          [[ -n "${BACKUP_NAME}" ]] || { echo "::error::Nessun backup disponibile in backup-registratore/."; exit 1; }
           BACKUP_PATH="backup-registratore/${BACKUP_NAME}"
-          if [[ ! -d "${BACKUP_PATH}" ]]; then
-            echo "::error::Backup ${BACKUP_NAME} non trovato nella repo privata."
-            exit 1
-          fi
-
-          if [[ ! -f "${BACKUP_PATH}/${BACKUP_NAME}.overall_export_metadata" ]]; then
-            echo "::error::Backup Firestore incompleto o nome metadata non coerente."
-            exit 1
-          fi
+          [[ -d "${BACKUP_PATH}" ]] || { echo "::error::Backup ${BACKUP_NAME} non trovato nella repo privata."; exit 1; }
+          [[ -f "${BACKUP_PATH}/${BACKUP_NAME}.overall_export_metadata" ]] || { echo "::error::Backup Firestore incompleto o metadata non coerente."; exit 1; }
 
           echo "name=${BACKUP_NAME}" >> "${GITHUB_OUTPUT}"
           echo "path=${BACKUP_PATH}" >> "${GITHUB_OUTPUT}"
@@ -129,7 +107,7 @@ jobs:
             case "${DB_LOCATION}" in
               nam5) BUCKET_LOCATION="US" ;;
               eur3) BUCKET_LOCATION="EU" ;;
-              *)    BUCKET_LOCATION="${DB_LOCATION}" ;;
+              *) BUCKET_LOCATION="${DB_LOCATION}" ;;
             esac
 
             gcloud storage buckets create "gs://${BACKUP_BUCKET}" \
@@ -154,7 +132,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "Avvio ripristino Firestore registratore dal backup ${{ steps.backup.outputs.name }}."
           gcloud firestore import "${{ steps.upload.outputs.uri }}" \
             --database="${DATABASE_ID}" \
             --project="${PROJECT_ID}" \
