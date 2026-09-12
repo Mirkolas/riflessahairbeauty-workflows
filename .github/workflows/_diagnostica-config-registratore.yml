@@ -11,36 +11,22 @@ permissions:
 
 jobs:
   discover:
-    name: Verifica PAT come Variable senza esporre valori
+    name: Verifica nome PAT senza esporre valori
     runs-on: ubuntu-latest
     steps:
-      - name: Variable PAT
-        if: ${{ vars.PAT != '' }}
-        run: echo "FOUND_VAR=PAT"
-      - name: Variable PAT_GITHUB
-        if: ${{ vars.PAT_GITHUB != '' }}
-        run: echo "FOUND_VAR=PAT_GITHUB"
-      - name: Variable GH_PAT
-        if: ${{ vars.GH_PAT != '' }}
-        run: echo "FOUND_VAR=GH_PAT"
-      - name: Variable PAT_TOKEN
-        if: ${{ vars.PAT_TOKEN != '' }}
-        run: echo "FOUND_VAR=PAT_TOKEN"
-      - name: Variable ACCESS_TOKEN
-        if: ${{ vars.ACCESS_TOKEN != '' }}
-        run: echo "FOUND_VAR=ACCESS_TOKEN"
-      - name: Variable REPO_PAT
-        if: ${{ vars.REPO_PAT != '' }}
-        run: echo "FOUND_VAR=REPO_PAT"
-      - name: Variable WORKFLOW_PAT
-        if: ${{ vars.WORKFLOW_PAT != '' }}
-        run: echo "FOUND_VAR=WORKFLOW_PAT"
-      - name: Variable FIREBASE_PAT
-        if: ${{ vars.FIREBASE_PAT != '' }}
-        run: echo "FOUND_VAR=FIREBASE_PAT"
-      - name: Variable GIT_PAT
-        if: ${{ vars.GIT_PAT != '' }}
-        run: echo "FOUND_VAR=GIT_PAT"
-      - name: Variable TOKEN
-        if: ${{ vars.TOKEN != '' }}
-        run: echo "FOUND_VAR=TOKEN"
+      - name: Cerca PAT configurato
+        shell: bash
+        env:
+          P1: ${{ secrets.GH_TOKEN }}
+          P2: ${{ secrets.PRIVATE_REPO_PAT }}
+          P3: ${{ secrets.REPO_ACCESS_TOKEN }}
+          P4: ${{ secrets.ACCESS_TOKEN }}
+          P5: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          P6: ${{ secrets.PAT_PRIVATE_REPO }}
+        run: |
+          [[ -n "$P1" ]] && echo "FOUND_SECRET=GH_TOKEN" || true
+          [[ -n "$P2" ]] && echo "FOUND_SECRET=PRIVATE_REPO_PAT" || true
+          [[ -n "$P3" ]] && echo "FOUND_SECRET=REPO_ACCESS_TOKEN" || true
+          [[ -n "$P4" ]] && echo "FOUND_SECRET=ACCESS_TOKEN" || true
+          [[ -n "$P5" ]] && echo "FOUND_SECRET=PRIVATE_REPO_TOKEN" || true
+          [[ -n "$P6" ]] && echo "FOUND_SECRET=PAT_PRIVATE_REPO" || true
