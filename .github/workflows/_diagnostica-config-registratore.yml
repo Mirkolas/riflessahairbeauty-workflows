@@ -11,22 +11,36 @@ permissions:
 
 jobs:
   discover:
-    name: Verifica nome PAT senza esporre valori
+    name: Verifica PAT come Variable senza esporre valori
     runs-on: ubuntu-latest
     steps:
-      - name: Cerca PAT configurato
-        shell: bash
-        env:
-          P1: ${{ secrets.PAT_REPO }}
-          P2: ${{ secrets.PAT_WORKFLOWS }}
-          P3: ${{ secrets.TOKEN_PAT }}
-          P4: ${{ secrets.GITHUB_ACCESS_TOKEN }}
-          P5: ${{ secrets.REPO_TOKEN }}
-          P6: ${{ secrets.WORKFLOW_TOKEN }}
-        run: |
-          [[ -n "$P1" ]] && echo "FOUND_SECRET=PAT_REPO" || true
-          [[ -n "$P2" ]] && echo "FOUND_SECRET=PAT_WORKFLOWS" || true
-          [[ -n "$P3" ]] && echo "FOUND_SECRET=TOKEN_PAT" || true
-          [[ -n "$P4" ]] && echo "FOUND_SECRET=GITHUB_ACCESS_TOKEN" || true
-          [[ -n "$P5" ]] && echo "FOUND_SECRET=REPO_TOKEN" || true
-          [[ -n "$P6" ]] && echo "FOUND_SECRET=WORKFLOW_TOKEN" || true
+      - name: Variable PAT
+        if: ${{ vars.PAT != '' }}
+        run: echo "FOUND_VAR=PAT"
+      - name: Variable PAT_GITHUB
+        if: ${{ vars.PAT_GITHUB != '' }}
+        run: echo "FOUND_VAR=PAT_GITHUB"
+      - name: Variable GH_PAT
+        if: ${{ vars.GH_PAT != '' }}
+        run: echo "FOUND_VAR=GH_PAT"
+      - name: Variable PAT_TOKEN
+        if: ${{ vars.PAT_TOKEN != '' }}
+        run: echo "FOUND_VAR=PAT_TOKEN"
+      - name: Variable ACCESS_TOKEN
+        if: ${{ vars.ACCESS_TOKEN != '' }}
+        run: echo "FOUND_VAR=ACCESS_TOKEN"
+      - name: Variable REPO_PAT
+        if: ${{ vars.REPO_PAT != '' }}
+        run: echo "FOUND_VAR=REPO_PAT"
+      - name: Variable WORKFLOW_PAT
+        if: ${{ vars.WORKFLOW_PAT != '' }}
+        run: echo "FOUND_VAR=WORKFLOW_PAT"
+      - name: Variable FIREBASE_PAT
+        if: ${{ vars.FIREBASE_PAT != '' }}
+        run: echo "FOUND_VAR=FIREBASE_PAT"
+      - name: Variable GIT_PAT
+        if: ${{ vars.GIT_PAT != '' }}
+        run: echo "FOUND_VAR=GIT_PAT"
+      - name: Variable TOKEN
+        if: ${{ vars.TOKEN != '' }}
+        run: echo "FOUND_VAR=TOKEN"
