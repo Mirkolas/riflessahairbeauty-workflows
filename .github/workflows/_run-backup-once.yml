@@ -24,4 +24,4 @@ jobs:
               workflow_id: 'firebase-backup-registratore.yml',
               ref: 'main'
             });
-            console.log('Backup completo registratore avviato.');
+            console.log('Backup completo registratore avviato - retry dopo correzione sintassi.');
