@@ -49,6 +49,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          echo "Riprova dopo propagazione IAM"
           ./node_modules/.bin/firebase deploy \
             --project "${PROJECT_ID}" \
             --only firestore:rules \
