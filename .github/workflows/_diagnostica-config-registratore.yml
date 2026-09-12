@@ -17,16 +17,16 @@ jobs:
       - name: Cerca PAT configurato
         shell: bash
         env:
-          P1: ${{ secrets.GH_TOKEN }}
-          P2: ${{ secrets.PRIVATE_REPO_PAT }}
-          P3: ${{ secrets.REPO_ACCESS_TOKEN }}
-          P4: ${{ secrets.ACCESS_TOKEN }}
-          P5: ${{ secrets.PRIVATE_REPO_TOKEN }}
-          P6: ${{ secrets.PAT_PRIVATE_REPO }}
+          P1: ${{ secrets.WORKFLOW_PAT }}
+          P2: ${{ secrets.WORKFLOWS_PAT }}
+          P3: ${{ secrets.DEPLOY_PAT }}
+          P4: ${{ secrets.PAT_DEPLOY }}
+          P5: ${{ secrets.FIREBASE_DEPLOY_PAT }}
+          P6: ${{ secrets.REPOSITORY_PAT }}
         run: |
-          [[ -n "$P1" ]] && echo "FOUND_SECRET=GH_TOKEN" || true
-          [[ -n "$P2" ]] && echo "FOUND_SECRET=PRIVATE_REPO_PAT" || true
-          [[ -n "$P3" ]] && echo "FOUND_SECRET=REPO_ACCESS_TOKEN" || true
-          [[ -n "$P4" ]] && echo "FOUND_SECRET=ACCESS_TOKEN" || true
-          [[ -n "$P5" ]] && echo "FOUND_SECRET=PRIVATE_REPO_TOKEN" || true
-          [[ -n "$P6" ]] && echo "FOUND_SECRET=PAT_PRIVATE_REPO" || true
+          [[ -n "$P1" ]] && echo "FOUND_SECRET=WORKFLOW_PAT" || true
+          [[ -n "$P2" ]] && echo "FOUND_SECRET=WORKFLOWS_PAT" || true
+          [[ -n "$P3" ]] && echo "FOUND_SECRET=DEPLOY_PAT" || true
+          [[ -n "$P4" ]] && echo "FOUND_SECRET=PAT_DEPLOY" || true
+          [[ -n "$P5" ]] && echo "FOUND_SECRET=FIREBASE_DEPLOY_PAT" || true
+          [[ -n "$P6" ]] && echo "FOUND_SECRET=REPOSITORY_PAT" || true
