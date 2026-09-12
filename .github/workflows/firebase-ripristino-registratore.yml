@@ -4,10 +4,18 @@ on:
   workflow_dispatch:
     inputs:
       backup_name:
-        description: "Nome cartella backup (es. backup-20260912-120000); vuoto = usa il piu recente"
+        description: "Nome cartella backup; vuoto = usa il piu recente"
         required: false
         default: ""
         type: string
+      auth_mode:
+        description: "Authentication: merge aggiorna/esporta mancanti; replace cancella gli account correnti e ripristina esattamente il backup"
+        required: true
+        default: "merge"
+        type: choice
+        options:
+          - merge
+          - replace
       conferma:
         description: "Scrivi RIPRISTINA per confermare"
         required: true
@@ -25,12 +33,13 @@ env:
   BACKUP_REPOSITORY: Mirkolas/riflessahairbeauty
   SOURCE_PAT: ${{ secrets.PUBLIC_REPO_TOKEN }}
   GOOGLE_CREDENTIALS_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+  AUTH_HASH_CONFIG: ${{ secrets.FIREBASE_AUTH_HASH_CONFIG }}
 
 jobs:
   restore:
-    name: Ripristino Firestore registratore
+    name: Ripristino completo registratore
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
 
     steps:
       - name: Verifica conferma e configurazione
@@ -40,9 +49,10 @@ jobs:
         run: |
           set -euo pipefail
           [[ "${CONFIRMATION}" == "RIPRISTINA" ]] || { echo "::error::Conferma non valida. Scrivere esattamente RIPRISTINA."; exit 1; }
-          [[ -n "${PROJECT_ID}" ]] || { echo "::error::Manca la Variable FIREBASE_PROJECT_ID."; exit 1; }
-          [[ -n "${GOOGLE_CREDENTIALS_JSON}" ]] || { echo "::error::Manca il Secret FIREBASE_SERVICE_ACCOUNT."; exit 1; }
-          [[ -n "${SOURCE_PAT}" ]] || { echo "::error::Manca il Secret PUBLIC_REPO_TOKEN nella repository riflessahairbeauty-workflows."; exit 1; }
+          [[ -n "${PROJECT_ID}" ]] || { echo "::error::Manca FIREBASE_PROJECT_ID."; exit 1; }
+          [[ -n "${GOOGLE_CREDENTIALS_JSON}" ]] || { echo "::error::Manca FIREBASE_SERVICE_ACCOUNT."; exit 1; }
+          [[ -n "${SOURCE_PAT}" ]] || { echo "::error::Manca PUBLIC_REPO_TOKEN."; exit 1; }
+          [[ -n "${AUTH_HASH_CONFIG}" ]] || { echo "::error::Manca FIREBASE_AUTH_HASH_CONFIG."; exit 1; }
 
       - name: Checkout repo privata backup
         uses: actions/checkout@v4
@@ -54,7 +64,7 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Seleziona backup dalla repo privata
+      - name: Seleziona e valida backup
         id: backup
         working-directory: backup-repo
         shell: bash
@@ -62,23 +72,32 @@ jobs:
           REQUESTED_BACKUP: ${{ inputs.backup_name }}
         run: |
           set -euo pipefail
-
           if [[ -n "${REQUESTED_BACKUP}" ]]; then
             [[ "${REQUESTED_BACKUP}" =~ ^backup-[0-9]{8}-[0-9]{6}$ ]] || { echo "::error::Nome backup non valido."; exit 1; }
             BACKUP_NAME="${REQUESTED_BACKUP}"
           else
             BACKUP_NAME="$(find backup-registratore -mindepth 1 -maxdepth 1 -type d -name 'backup-*' -printf '%f\n' 2>/dev/null | sort | tail -n 1)"
           fi
-
-          [[ -n "${BACKUP_NAME}" ]] || { echo "::error::Nessun backup disponibile in backup-registratore/."; exit 1; }
+          [[ -n "${BACKUP_NAME}" ]] || { echo "::error::Nessun backup disponibile."; exit 1; }
           BACKUP_PATH="backup-registratore/${BACKUP_NAME}"
-          BACKUP_FILE="${BACKUP_PATH}/firestore.json"
-          [[ -f "${BACKUP_FILE}" ]] || { echo "::error::Backup Firestore JSON non trovato."; exit 1; }
+          [[ -d "${BACKUP_PATH}" ]] || { echo "::error::Cartella backup inesistente."; exit 1; }
 
-          node -e "const b=require(process.argv[1]); if(b.format!=='riflessa-firestore-json-v1'||!Array.isArray(b.documents)) process.exit(1); console.log('Backup valido:', b.documentCount, 'documenti');" "${BACKUP_FILE}"
+          if [[ -f "${BACKUP_PATH}/manifest.json" ]]; then
+            node -e "const m=require('./${BACKUP_PATH}/manifest.json'); if(m.format!=='riflessa-registratore-backup-v2') process.exit(1); console.log('Backup v2:',m.firestore.documentCount,'documenti,',m.authentication.accountCount,'account');"
+            [[ -f "${BACKUP_PATH}/firestore/manifest.json" ]] || { echo "::error::Manifest Firestore assente."; exit 1; }
+            [[ -f "${BACKUP_PATH}/authentication.enc.json" ]] || { echo "::error::Backup Authentication assente."; exit 1; }
+            FORMAT="v2"
+          elif [[ -f "${BACKUP_PATH}/firestore.json" ]]; then
+            node -e "const b=require('./${BACKUP_PATH}/firestore.json'); if(b.format!=='riflessa-firestore-json-v1'||!Array.isArray(b.documents)) process.exit(1);"
+            FORMAT="v1"
+          else
+            echo "::error::Formato backup non riconosciuto."
+            exit 1
+          fi
 
           echo "name=${BACKUP_NAME}" >> "${GITHUB_OUTPUT}"
-          echo "file=${BACKUP_FILE}" >> "${GITHUB_OUTPUT}"
+          echo "path=${BACKUP_PATH}" >> "${GITHUB_OUTPUT}"
+          echo "format=${FORMAT}" >> "${GITHUB_OUTPUT}"
 
       - name: Configura Node.js
         uses: actions/setup-node@v4
@@ -89,93 +108,236 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "${RUNNER_TEMP}/firestore-restore-tool"
-          cd "${RUNNER_TEMP}/firestore-restore-tool"
+          mkdir -p "${RUNNER_TEMP}/registratore-restore-tool"
+          cd "${RUNNER_TEMP}/registratore-restore-tool"
           npm init -y >/dev/null 2>&1
-          npm install firebase-admin@13 --no-audit --no-fund
+          npm install firebase-admin@13 --no-audit --no-fund >/dev/null
 
-      - name: Prepara ripristino Firestore
+      - name: Prepara ripristino completo
         shell: bash
         run: |
-          cat > "${RUNNER_TEMP}/firestore-restore-tool/restore.cjs" <<'NODE'
+          cat > "${RUNNER_TEMP}/registratore-restore-tool/restore.cjs" <<'NODE'
           const fs = require('fs');
+          const path = require('path');
+          const crypto = require('crypto');
           const admin = require('firebase-admin');
 
+          function parseHashConfig(raw) {
+            try { return JSON.parse(raw); } catch {}
+            const cfg = {};
+            for (const key of ['algorithm','base64_signer_key','base64_salt_separator','rounds','mem_cost']) {
+              const re = new RegExp(`${key}\\s*[:=]\\s*(?:"([^"]*)"|'([^']*)'|([^,\\s}]+))`, 'i');
+              const m = String(raw).match(re);
+              if (m) cfg[key] = m[1] ?? m[2] ?? m[3];
+            }
+            if (cfg.rounds !== undefined) cfg.rounds = Number(cfg.rounds);
+            if (cfg.mem_cost !== undefined) cfg.mem_cost = Number(cfg.mem_cost);
+            return cfg;
+          }
+
+          function normalizedHashConfig(raw) {
+            const cfg = parseHashConfig(raw);
+            for (const key of ['algorithm','base64_signer_key','base64_salt_separator','rounds','mem_cost']) {
+              if (cfg[key] === undefined || cfg[key] === null || cfg[key] === '') throw new Error(`Parametro hash mancante: ${key}`);
+            }
+            return {
+              algorithm: String(cfg.algorithm).toUpperCase(),
+              base64_signer_key: String(cfg.base64_signer_key),
+              base64_salt_separator: String(cfg.base64_salt_separator),
+              rounds: Number(cfg.rounds),
+              mem_cost: Number(cfg.mem_cost)
+            };
+          }
+
           const credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON);
-          admin.initializeApp({
-            credential: admin.credential.cert(credentials),
-            projectId: process.env.PROJECT_ID,
-          });
+          admin.initializeApp({ credential: admin.credential.cert(credentials), projectId: process.env.PROJECT_ID });
           const db = admin.firestore();
+          const auth = admin.auth();
 
           function decode(value) {
             if (value === null || value === undefined) return value;
             if (Array.isArray(value)) return value.map(decode);
             if (typeof value !== 'object') return value;
-
-            if (value.__firestoreType === 'timestamp') {
-              return new admin.firestore.Timestamp(value.seconds, value.nanoseconds);
-            }
-            if (value.__firestoreType === 'geopoint') {
-              return new admin.firestore.GeoPoint(value.latitude, value.longitude);
-            }
-            if (value.__firestoreType === 'reference') {
-              return db.doc(value.path);
-            }
-            if (value.__firestoreType === 'bytes') {
-              return Buffer.from(value.base64, 'base64');
-            }
-
-            const result = {};
-            for (const [key, child] of Object.entries(value)) result[key] = decode(child);
-            return result;
+            if (value.__firestoreType === 'timestamp') return new admin.firestore.Timestamp(value.seconds, value.nanoseconds);
+            if (value.__firestoreType === 'geopoint') return new admin.firestore.GeoPoint(value.latitude, value.longitude);
+            if (value.__firestoreType === 'reference') return db.doc(value.path);
+            if (value.__firestoreType === 'bytes') return Buffer.from(value.base64, 'base64');
+            const out = {};
+            for (const [k, v] of Object.entries(value)) out[k] = decode(v);
+            return out;
           }
 
-          async function main() {
-            const backup = JSON.parse(fs.readFileSync(process.env.BACKUP_FILE, 'utf8'));
-            if (backup.format !== 'riflessa-firestore-json-v1' || !Array.isArray(backup.documents)) {
-              throw new Error('Formato backup non valido');
-            }
-            if (backup.projectId && backup.projectId !== process.env.PROJECT_ID) {
-              throw new Error(`Backup del progetto ${backup.projectId}, progetto corrente ${process.env.PROJECT_ID}`);
-            }
-
+          async function writeDocuments(documents) {
             let batch = db.batch();
             let pending = 0;
             let restored = 0;
-
-            for (const document of backup.documents) {
-              if (!document.path || !document.data) throw new Error('Documento backup non valido');
-              batch.set(db.doc(document.path), decode(document.data), { merge: false });
+            for (const item of documents) {
+              if (!item.path || item.data === undefined) throw new Error('Documento Firestore non valido');
+              batch.set(db.doc(item.path), decode(item.data), { merge: false });
               pending += 1;
               restored += 1;
-
               if (pending >= 400) {
                 await batch.commit();
                 batch = db.batch();
                 pending = 0;
               }
             }
+            if (pending) await batch.commit();
+            return restored;
+          }
 
-            if (pending > 0) await batch.commit();
+          async function restoreFirestore(backupPath, format) {
+            let restored = 0;
+            if (format === 'v1') {
+              const old = JSON.parse(fs.readFileSync(path.join(backupPath, 'firestore.json'), 'utf8'));
+              restored = await writeDocuments(old.documents || []);
+            } else {
+              const manifest = JSON.parse(fs.readFileSync(path.join(backupPath, 'firestore', 'manifest.json'), 'utf8'));
+              if (manifest.projectId && manifest.projectId !== process.env.PROJECT_ID) throw new Error('Backup Firestore di un progetto diverso');
+              for (const part of manifest.parts || []) {
+                const text = fs.readFileSync(path.join(backupPath, 'firestore', part), 'utf8');
+                const docs = text.split('\n').filter(Boolean).map(line => JSON.parse(line));
+                restored += await writeDocuments(docs);
+              }
+              if (restored !== Number(manifest.documentCount)) throw new Error(`Conteggio Firestore incoerente: ${restored}/${manifest.documentCount}`);
+            }
             console.log(`Ripristinati ${restored} documenti Firestore.`);
           }
 
-          main().catch((error) => {
-            console.error(error);
-            process.exit(1);
-          });
+          function decryptAuth(backupPath) {
+            const envelope = JSON.parse(fs.readFileSync(path.join(backupPath, 'authentication.enc.json'), 'utf8'));
+            if (envelope.format !== 'riflessa-firebase-auth-aes256gcm-v1') throw new Error('Formato Authentication non valido');
+            const hashCfg = normalizedHashConfig(process.env.AUTH_HASH_CONFIG);
+            const canonical = JSON.stringify(hashCfg);
+            const fingerprint = crypto.createHash('sha256').update(canonical).digest('hex');
+            if (fingerprint !== envelope.configFingerprint) throw new Error('FIREBASE_AUTH_HASH_CONFIG non corrisponde a quello usato per il backup');
+            const key = crypto.createHash('sha256').update(canonical).digest();
+            const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(envelope.iv, 'base64'));
+            decipher.setAuthTag(Buffer.from(envelope.authTag, 'base64'));
+            const plain = Buffer.concat([decipher.update(Buffer.from(envelope.ciphertext, 'base64')), decipher.final()]);
+            const payload = JSON.parse(plain.toString('utf8'));
+            if (payload.format !== 'riflessa-firebase-auth-v1') throw new Error('Payload Authentication non valido');
+            return { payload, hashCfg };
+          }
+
+          function importRecord(u) {
+            const out = {
+              uid: u.uid,
+              emailVerified: !!u.emailVerified,
+              disabled: !!u.disabled
+            };
+            if (u.email) out.email = u.email;
+            if (u.displayName) out.displayName = u.displayName;
+            if (u.photoURL) out.photoURL = u.photoURL;
+            if (u.phoneNumber) out.phoneNumber = u.phoneNumber;
+            if (u.customClaims) out.customClaims = u.customClaims;
+            if (Array.isArray(u.providerData) && u.providerData.length) out.providerData = u.providerData.filter(p => p.providerId && p.uid).map(p => ({
+              uid: p.uid,
+              displayName: p.displayName || undefined,
+              email: p.email || undefined,
+              photoURL: p.photoURL || undefined,
+              providerId: p.providerId
+            }));
+            if (u.passwordHash) out.passwordHash = Buffer.from(u.passwordHash, 'base64');
+            if (u.passwordSalt) out.passwordSalt = Buffer.from(u.passwordSalt, 'base64');
+            return out;
+          }
+
+          function scryptOptions(cfg) {
+            if (cfg.algorithm !== 'SCRYPT') throw new Error(`Algoritmo hash non supportato automaticamente: ${cfg.algorithm}`);
+            return {
+              algorithm: 'SCRYPT',
+              key: Buffer.from(cfg.base64_signer_key, 'base64'),
+              saltSeparator: Buffer.from(cfg.base64_salt_separator, 'base64'),
+              rounds: cfg.rounds,
+              memoryCost: cfg.mem_cost
+            };
+          }
+
+          async function deleteAllAuthUsers() {
+            let total = 0;
+            while (true) {
+              const page = await auth.listUsers(1000);
+              if (!page.users.length) break;
+              for (let i = 0; i < page.users.length; i += 1000) {
+                const uids = page.users.slice(i, i + 1000).map(u => u.uid);
+                const result = await auth.deleteUsers(uids);
+                if (result.failureCount) throw new Error(`Errore eliminazione Authentication: ${result.failureCount} account`);
+                total += result.successCount;
+              }
+            }
+            console.log(`Authentication corrente eliminata: ${total} account.`);
+          }
+
+          async function restoreAuth(backupPath, mode) {
+            const { payload, hashCfg } = decryptAuth(backupPath);
+            const users = payload.users || [];
+            if (mode === 'replace') await deleteAllAuthUsers();
+
+            let existing = new Map();
+            if (mode === 'merge') {
+              for (let i = 0; i < users.length; i += 100) {
+                const ids = users.slice(i, i + 100).map(u => ({ uid: u.uid }));
+                const result = await auth.getUsers(ids);
+                for (const u of result.users) existing.set(u.uid, u);
+              }
+            }
+
+            const missing = [];
+            let updated = 0;
+            for (const u of users) {
+              if (!existing.has(u.uid)) {
+                missing.push(importRecord(u));
+                continue;
+              }
+              const changes = { disabled: !!u.disabled, emailVerified: !!u.emailVerified };
+              if (u.email) changes.email = u.email;
+              changes.displayName = u.displayName || null;
+              changes.photoURL = u.photoURL || null;
+              if (u.phoneNumber) changes.phoneNumber = u.phoneNumber;
+              await auth.updateUser(u.uid, changes);
+              await auth.setCustomUserClaims(u.uid, u.customClaims || null);
+              updated += 1;
+            }
+
+            let imported = 0;
+            for (let i = 0; i < missing.length; i += 1000) {
+              const chunk = missing.slice(i, i + 1000);
+              const hasHashes = chunk.some(u => u.passwordHash);
+              const result = await auth.importUsers(chunk, hasHashes ? { hash: scryptOptions(hashCfg) } : undefined);
+              if (result.failureCount) {
+                const details = result.errors.map(e => `${e.index}:${e.error?.message || e.error}`).join('; ');
+                throw new Error(`Import Authentication parziale: ${result.failureCount} errori - ${details}`);
+              }
+              imported += result.successCount;
+            }
+            console.log(`Authentication: ${imported} account importati, ${updated} aggiornati.`);
+          }
+
+          async function main() {
+            const backupPath = process.env.BACKUP_PATH;
+            const format = process.env.BACKUP_FORMAT;
+            await restoreFirestore(backupPath, format);
+            if (format === 'v2') await restoreAuth(backupPath, process.env.AUTH_MODE || 'merge');
+            else console.log('Backup v1: nessun archivio Authentication presente.');
+          }
+
+          main().catch(error => { console.error(error); process.exit(1); });
           NODE
 
-      - name: Ripristina Firestore dal backup
+      - name: Ripristina Firestore e Authentication
         working-directory: backup-repo
         shell: bash
         env:
-          BACKUP_FILE: ${{ steps.backup.outputs.file }}
+          BACKUP_PATH: ${{ steps.backup.outputs.path }}
+          BACKUP_FORMAT: ${{ steps.backup.outputs.format }}
+          AUTH_MODE: ${{ inputs.auth_mode }}
         run: |
           set -euo pipefail
-          node "${RUNNER_TEMP}/firestore-restore-tool/restore.cjs"
+          node "${RUNNER_TEMP}/registratore-restore-tool/restore.cjs"
 
       - name: Riepilogo
         shell: bash
-        run: echo "Ripristino registratore completato dal backup ${{ steps.backup.outputs.name }}."
+        run: |
+          echo "Ripristino registratore completato dal backup ${{ steps.backup.outputs.name }}."
+          echo "Modalita Authentication: ${{ inputs.auth_mode }}"
