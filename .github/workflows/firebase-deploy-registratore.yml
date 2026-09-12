@@ -20,7 +20,7 @@ concurrency:
 
 env:
   PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID }}
-  HOSTING_TARGET: ${{ vars.FIREBASE_HOSTING_TARGET }}
+  HOSTING_TARGET: registratore
   SOURCE_REPOSITORY: Mirkolas/riflessahairbeauty
   SOURCE_PAT: ${{ secrets.PUBLIC_REPO_TOKEN }}
   GOOGLE_CREDENTIALS_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
@@ -37,9 +37,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ -n "${PROJECT_ID}" ]] || { echo "::error::Manca la Variable FIREBASE_PROJECT_ID."; exit 1; }
-          [[ -n "${HOSTING_TARGET}" ]] || { echo "::error::Manca la Variable FIREBASE_HOSTING_TARGET."; exit 1; }
-          [[ "${HOSTING_TARGET}" == "registratore" ]] || { echo "::error::FIREBASE_HOSTING_TARGET deve essere registratore."; exit 1; }
-          [[ -n "${SOURCE_PAT}" ]] || { echo "::error::Manca il Secret PUBLIC_REPO_TOKEN."; exit 1; }
+          [[ -n "${SOURCE_PAT}" ]] || { echo "::error::Manca il Secret PUBLIC_REPO_TOKEN nella repository che esegue il workflow."; exit 1; }
           [[ -n "${GOOGLE_CREDENTIALS_JSON}" ]] || { echo "::error::Manca il Secret FIREBASE_SERVICE_ACCOUNT."; exit 1; }
 
       - name: Determina ref applicazione
