@@ -39,9 +39,20 @@ Gli hash password Firebase SCRYPT vengono importati usando `FIREBASE_AUTH_HASH_C
 
 ## Firebase deploy - registratore
 
-Il deploy e manuale o tramite `repository_dispatch`. Esegue prima `npm test` e `npm run check`, poi pubblica esclusivamente `hosting:registratore` sul progetto `riflessa-15a20`.
+Il deploy e manuale o tramite `repository_dispatch`. Esegue prima `npm test` e `npm run check`, quindi pubblica insieme:
+
+- `firestore:rules` sul progetto `riflessa-15a20`;
+- `hosting:registratore` sul sito `riflessa-15a20.web.app`.
 
 L'interfaccia registratore e responsive anche sulla versione Hosting: desktop, PC da banco, tablet e schermi piccoli. L'app Electron e ridimensionabile fino a 360 px e utilizza lo stesso foglio `responsive.css`.
+
+## Sincronizzazione log locali
+
+La sincronizzazione cloud dei log e attiva. Dopo il login nell'app Electron, se la postazione e online, `js/log-sync.js` legge i file locali esposti dal preload Electron e li salva a blocchi nella collection `registratoreLogFiles` e nelle relative subcollection `chunks`.
+
+La sincronizzazione parte poco dopo l'autenticazione e viene ripetuta periodicamente; vengono risincronizzati soltanto i file modificati. Le Firestore Rules consentono la scrittura all'utente autenticato soltanto quando `operatorUid` coincide con il suo UID.
+
+Il primo backup completo v2 eseguito prima dell'attivazione definitiva delle Rules conteneva ancora `0` documenti log. Dopo che l'app Electron viene aperta e autenticata almeno una volta con connessione disponibile, i log locali vengono caricati su Firestore e rientrano automaticamente nei backup successivi.
 
 ## Configurazione GitHub Actions
 
@@ -66,18 +77,14 @@ Sono stati verificati con GitHub Actions reale:
 
 - accesso read/write alla repository privata con `PUBLIC_REPO_TOKEN`;
 - test applicativi e `npm run check`;
-- responsive CSS e codice di sincronizzazione log;
+- responsive CSS;
+- codice di sincronizzazione log e relativo caricamento nell'app;
 - lettura ricorsiva Firestore;
 - lettura Firebase Authentication con password hash;
 - riconoscimento configurazione SCRYPT (`rounds=8`, `mem_cost=14`);
 - backup completo reale con commit e push nella repository privata;
 - decrittazione Authentication e dry-run non distruttivo del ripristino;
-- deploy Hosting reale sul target `registratore`.
+- pubblicazione reale delle Firestore Rules con ruolo IAM `Firebase Rules Admin`;
+- deploy reale combinato `firestore:rules,hosting:registratore` completato con successo.
 
-Il backup reale del 12 settembre 2026 ha prodotto il formato `riflessa-registratore-backup-v2`, con 6 documenti Firestore e 1 account Authentication con hash password. In quel momento non erano ancora presenti documenti `registratoreLogFiles`, perche le nuove regole Firestore non erano ancora state pubblicate.
-
-## Regole Firestore e sincronizzazione log
-
-Il codice e le regole per `registratoreLogFiles` sono gia presenti nella repository privata. Il service account attuale, pero, non dispone del permesso per pubblicare Firebase Security Rules e il test dell'API `firebaserules` ha restituito `403`. Inoltre non e configurato un Secret `FIREBASE_TOKEN` alternativo.
-
-Per attivare la sincronizzazione cloud dei log locali occorre assegnare al service account il ruolo IAM **Firebase Rules Admin** (`roles/firebaserules.admin`) sul progetto `riflessa-15a20`, quindi pubblicare `firestore.rules`. Fino a quel momento Firestore/Auth/config vengono regolarmente salvati, mentre i file locali `RiflessaAxon` non possono ancora essere caricati nel cloud.
+Il backup reale del 12 settembre 2026 ha prodotto il formato `riflessa-registratore-backup-v2`, con 6 documenti Firestore e 1 account Authentication con hash password. In quel momento la sincronizzazione log non era ancora attiva nel client; la versione successivamente distribuita include il caricamento automatico di `js/log-sync.js`.
