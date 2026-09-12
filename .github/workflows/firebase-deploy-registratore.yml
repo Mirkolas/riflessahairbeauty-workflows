@@ -92,12 +92,12 @@ jobs:
           create_credentials_file: true
           export_environment_variables: true
 
-      - name: Deploy Hosting registratore e regole Firestore
+      - name: Deploy Hosting registratore
         working-directory: app/riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
         shell: bash
         run: |
           set -euo pipefail
           ./node_modules/.bin/firebase deploy \
             --project "${PROJECT_ID}" \
-            --only "firestore:rules,hosting:${HOSTING_TARGET}" \
+            --only "hosting:${HOSTING_TARGET}" \
             --non-interactive
