@@ -1,0 +1,28 @@
+name: Avvia deploy test log sync incrementale
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/_run-deploy-logsync-v2.yml"
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Avvia deploy definitivo
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'firebase-deploy-registratore.yml',
+              ref: 'main',
+              inputs: { ref: 'main' }
+            });
+            console.log('Deploy registratore avviato.');
