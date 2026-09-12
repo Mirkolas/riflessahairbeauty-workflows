@@ -165,3 +165,5 @@ jobs:
           if(!ok) throw new Error('Sito riflessa-15a20 non trovato');
           console.log('Firebase Hosting riflessa-15a20: OK');
           NODE
+
+# rerun after aligning application tests
