@@ -7,24 +7,51 @@ Workflow separati dalla repository applicativa privata `Mirkolas/riflessahairbea
 - **Registratore**: target Firebase `registratore` -> site ID `riflessa-15a20` -> `riflessa-15a20.web.app`.
 - **Futura web app**: target Firebase `hairbeauty` -> site ID `riflessa-hair-beauty` -> `riflessa-hair-beauty.web.app`.
 
-## Workflow registratore
+## Firebase backup - registratore
 
-- **Firebase backup - registratore**: esecuzione giornaliera alle `02:17 UTC` e avvio manuale. Legge Firestore tramite Firebase Admin SDK e crea un backup JSON completo nella repository privata sotto `backup-registratore/backup-YYYYMMDD-HHMMSS/`.
-- **Tentativi backup**: ogni esecuzione prova fino a 5 volte l'intero ciclo lettura Firestore -> validazione JSON -> commit -> push. Il tentativo e considerato riuscito solo dopo il push nella repository privata.
-- **Retention backup**: quando il numero di cartelle backup raggiunge 5, vengono eliminati i backup precedenti e viene conservato soltanto il backup appena creato.
-- **Firebase deploy - registratore**: deploy manuale o tramite `repository_dispatch`; esegue `npm test` e `npm run check`, quindi pubblica esclusivamente il target Hosting `registratore` sul progetto `riflessa-15a20`.
-- **Firebase ripristino - registratore**: ripristino manuale dal file `firestore.json` presente in una cartella `backup-registratore/backup-YYYYMMDD-HHMMSS/`. Se non viene indicato un nome usa il backup piu recente. Richiede la conferma testuale esatta `RIPRISTINA`.
+Esecuzione giornaliera alle `02:17 UTC` e avvio manuale. Ogni esecuzione prova fino a 5 volte e viene considerata riuscita soltanto dopo il push nella repository privata.
 
-Il backup e il ripristino JSON non richiedono un bucket Google Cloud Storage e non richiedono l'attivazione del billing GCP.
+Il backup viene salvato in `Mirkolas/riflessahairbeauty/backup-registratore/backup-YYYYMMDD-HHMMSS/` e contiene:
+
+- **Firestore completo**, con scansione ricorsiva di tutte le collection e subcollection. Include quindi scontrini, utenti/profili, operatori, prodotti, categorie, sessioni di cassa, chiusure, resi, movimenti, impostazioni e qualsiasi altra collection presente nel progetto.
+- **Firebase Authentication**, inclusi UID, email, provider, custom claims, stato account, `passwordHash` e `passwordSalt` quando presenti. I dati Authentication vengono cifrati con AES-256-GCM prima di essere salvati nella repository privata.
+- **Configurazione necessaria alle password Firebase SCRYPT** tramite il Secret `FIREBASE_AUTH_HASH_CONFIG`; il valore del secret non viene mai scritto nel backup.
+- **Log locali del registratore** sincronizzati dall'app Electron nella collection Firestore `registratoreLogFiles`, inclusi `RIFLESSA_SERVICE_LOG.txt`, i log JSONL e il profilo locale presenti nella cartella `RiflessaAxon`.
+- **Configurazione dell'applicazione**: `.firebaserc`, `firebase.json`, `firestore.rules`, `package.json`, profilo AXON predefinito e configurazione Firebase web.
+- **Commit sorgente** dell'app dal quale e stato eseguito il backup.
+
+I dati Firestore vengono divisi in file JSONL da circa 15 MB per evitare il limite dei singoli file GitHub quando i log cresceranno.
+
+### Retention
+
+La regola richiesta e mantenuta: quando il numero delle cartelle backup raggiunge 5, vengono eliminati i backup precedenti e viene conservato soltanto il backup appena creato.
+
+## Firebase ripristino - registratore
+
+Il ripristino e manuale e richiede la conferma esatta `RIPRISTINA`. Se il nome del backup viene lasciato vuoto usa quello piu recente.
+
+Il formato v2 ripristina Firestore e Firebase Authentication. Per Authentication sono disponibili:
+
+- `merge`: aggiorna gli account esistenti e importa quelli mancanti;
+- `replace`: elimina gli account Authentication correnti e ricrea quelli presenti nel backup.
+
+Gli hash password Firebase SCRYPT vengono importati usando `FIREBASE_AUTH_HASH_CONFIG`, in modo da conservare le password esistenti. E supportato anche il vecchio backup Firestore-only v1.
+
+## Firebase deploy - registratore
+
+Il deploy e manuale o tramite `repository_dispatch`. Esegue prima `npm test` e `npm run check`, poi pubblica esclusivamente `hosting:registratore` sul progetto `riflessa-15a20`.
+
+L'interfaccia registratore e responsive anche sulla versione Hosting: desktop, PC da banco, tablet e schermi piccoli. L'app Electron e ridimensionabile fino a 360 px e utilizza lo stesso foglio `responsive.css`.
 
 ## Configurazione GitHub Actions
 
-I workflow usano esclusivamente questi nomi configurati nella repository pubblica `Mirkolas/riflessahairbeauty-workflows`:
+La repository pubblica `Mirkolas/riflessahairbeauty-workflows` usa questi nomi esatti.
 
 ### Secrets
 
 - `FIREBASE_SERVICE_ACCOUNT`: JSON del service account Firebase/GCP.
-- `PUBLIC_REPO_TOKEN`: fine-grained PAT con accesso alla repository privata `Mirkolas/riflessahairbeauty`; per il backup deve avere `Contents: Read and write`.
+- `PUBLIC_REPO_TOKEN`: fine-grained PAT con `Contents: Read and write` sulla repository privata `Mirkolas/riflessahairbeauty`.
+- `FIREBASE_AUTH_HASH_CONFIG`: parametri hash Firebase Authentication; sono accettati sia JSON sia il formato nativo `hash_config { ... }` mostrato dalla console Firebase.
 
 ### Variables
 
@@ -33,22 +60,24 @@ I workflow usano esclusivamente questi nomi configurati nella repository pubblic
 
 Nessun valore sensibile viene inserito nei file pubblici.
 
-## Verifiche eseguite
+## Verifiche reali eseguite
 
-La configurazione e stata provata con GitHub Actions reale:
+Sono stati verificati con GitHub Actions reale:
 
-- accesso della repository pubblica alla repository privata tramite `PUBLIC_REPO_TOKEN`;
-- mapping `registratore` -> `riflessa-15a20`;
-- test applicativi e controllo progetto;
-- autenticazione con `FIREBASE_SERVICE_ACCOUNT`;
-- lettura Firestore;
-- backup JSON reale con commit e push nella repository privata;
-- validazione del formato di ripristino senza modificare i dati;
-- verifica del sito Firebase Hosting `riflessa-15a20`;
+- accesso read/write alla repository privata con `PUBLIC_REPO_TOKEN`;
+- test applicativi e `npm run check`;
+- responsive CSS e codice di sincronizzazione log;
+- lettura ricorsiva Firestore;
+- lettura Firebase Authentication con password hash;
+- riconoscimento configurazione SCRYPT (`rounds=8`, `mem_cost=14`);
+- backup completo reale con commit e push nella repository privata;
+- decrittazione Authentication e dry-run non distruttivo del ripristino;
 - deploy Hosting reale sul target `registratore`.
 
-## Regole Firestore
+Il backup reale del 12 settembre 2026 ha prodotto il formato `riflessa-registratore-backup-v2`, con 6 documenti Firestore e 1 account Authentication con hash password. In quel momento non erano ancora presenti documenti `registratoreLogFiles`, perche le nuove regole Firestore non erano ancora state pubblicate.
 
-Il service account attuale consente l'accesso a Firestore e il deploy Firebase Hosting, ma il test di deploy delle regole Firestore ha restituito `403` sull'API Firebase Rules. Per questo il workflow di deploy definitivo pubblica il solo Hosting `registratore`, evitando esecuzioni che risultino fallite dopo un deploy valido del sito.
+## Regole Firestore e sincronizzazione log
 
-Quando al service account verra assegnato il permesso IAM necessario per amministrare Firebase Rules, il deploy delle `firestore:rules` potra essere riattivato nel workflow.
+Il codice e le regole per `registratoreLogFiles` sono gia presenti nella repository privata. Il service account attuale, pero, non dispone del permesso per pubblicare Firebase Security Rules e il test dell'API `firebaserules` ha restituito `403`. Inoltre non e configurato un Secret `FIREBASE_TOKEN` alternativo.
+
+Per attivare la sincronizzazione cloud dei log locali occorre assegnare al service account il ruolo IAM **Firebase Rules Admin** (`roles/firebaserules.admin`) sul progetto `riflessa-15a20`, quindi pubblicare `firestore.rules`. Fino a quel momento Firestore/Auth/config vengono regolarmente salvati, mentre i file locali `RiflessaAxon` non possono ancora essere caricati nel cloud.
