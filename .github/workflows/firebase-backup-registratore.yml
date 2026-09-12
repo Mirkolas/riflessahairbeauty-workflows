@@ -16,13 +16,15 @@ env:
   PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID || vars.GCP_PROJECT_ID || 'riflessa-15a20' }}
   DATABASE_ID: "(default)"
   BACKUP_BUCKET: ${{ vars.FIRESTORE_BACKUP_BUCKET || vars.BACKUP_BUCKET || 'riflessa-15a20-firestore-backups' }}
+  BACKUP_REPOSITORY: ${{ vars.APP_REPOSITORY || 'Mirkolas/riflessahairbeauty' }}
+  SOURCE_PAT: ${{ secrets.RIFLESSA_PAT || secrets.REPO_PAT || secrets.GH_PAT || secrets.PAT }}
   GOOGLE_CREDENTIALS_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_RIFLESSA_15A20 || secrets.FIREBASE_SERVICE_ACCOUNT || secrets.GCP_CREDENTIALS || secrets.GOOGLE_CREDENTIALS }}
 
 jobs:
   backup:
     name: Backup Firestore registratore
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
 
     steps:
       - name: Verifica configurazione protetta
@@ -33,10 +35,24 @@ jobs:
             echo "::error::Manca il secret con le credenziali Google/Firebase."
             exit 1
           fi
-          if [[ -z "${BACKUP_BUCKET}" ]]; then
-            echo "::error::Manca il nome del bucket di backup."
+          if [[ -z "${SOURCE_PAT}" ]]; then
+            echo "::error::Manca il PAT con accesso in scrittura alla repo privata dei backup."
             exit 1
           fi
+          if [[ -z "${BACKUP_BUCKET}" ]]; then
+            echo "::error::Manca il nome del bucket temporaneo di backup."
+            exit 1
+          fi
+
+      - name: Checkout repo privata backup
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.BACKUP_REPOSITORY }}
+          ref: main
+          token: ${{ env.SOURCE_PAT }}
+          path: backup-repo
+          fetch-depth: 0
+          persist-credentials: true
 
       - name: Autenticazione Google Cloud
         uses: google-github-actions/auth@v2
@@ -50,7 +66,7 @@ jobs:
         with:
           project_id: ${{ env.PROJECT_ID }}
 
-      - name: Prepara bucket backup
+      - name: Prepara bucket temporaneo
         shell: bash
         run: |
           set -euo pipefail
@@ -74,46 +90,93 @@ jobs:
               --uniform-bucket-level-access
           fi
 
-      - name: Crea backup completo Firestore
-        id: export
+      - name: Crea backup con massimo 5 tentativi
+        id: backup
+        working-directory: backup-repo
         shell: bash
         run: |
-          set -euo pipefail
-          TIMESTAMP="$(date -u +'%Y%m%d-%H%M%S')"
-          DESTINATION="gs://${BACKUP_BUCKET}/registratore/daily/backup-${TIMESTAMP}"
+          set -uo pipefail
 
-          gcloud firestore export "${DESTINATION}" \
-            --database="${DATABASE_ID}" \
-            --project="${PROJECT_ID}" \
-            --quiet
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          echo "destination=${DESTINATION}" >> "${GITHUB_OUTPUT}"
+          SUCCESS=0
+          FINAL_BACKUP=""
 
-      - name: Retention - al quinto conserva solo il piu recente
-        shell: bash
-        run: |
-          set -euo pipefail
+          for ATTEMPT in 1 2 3 4 5; do
+            echo "Tentativo backup ${ATTEMPT}/5"
 
-          mapfile -t BACKUPS < <(
-            gcloud storage ls "gs://${BACKUP_BUCKET}/registratore/daily/" 2>/dev/null \
-              | grep '/$' \
-              | sort
-          )
+            git fetch origin main
+            git reset --hard origin/main
+            git clean -fd backup-registratore
 
-          COUNT="${#BACKUPS[@]}"
-          echo "Backup registratore presenti: ${COUNT}"
+            TIMESTAMP="$(date -u +'%Y%m%d-%H%M%S')"
+            BACKUP_NAME="backup-${TIMESTAMP}"
+            LOCAL_DIR="backup-registratore/${BACKUP_NAME}"
+            GCS_DIR="gs://${BACKUP_BUCKET}/registratore/staging/${BACKUP_NAME}-attempt-${ATTEMPT}"
 
-          if (( COUNT >= 5 )); then
-            NEWEST="${BACKUPS[$((COUNT - 1))]}"
-            echo "Soglia 5 raggiunta: conservo soltanto il backup piu recente."
+            mkdir -p "${LOCAL_DIR}"
 
-            for BACKUP_URI in "${BACKUPS[@]}"; do
-              if [[ "${BACKUP_URI}" != "${NEWEST}" ]]; then
-                gcloud storage rm --recursive "${BACKUP_URI}"
+            if gcloud firestore export "${GCS_DIR}" \
+              --database="${DATABASE_ID}" \
+              --project="${PROJECT_ID}" \
+              --quiet \
+              && gcloud storage rsync "${GCS_DIR}" "${LOCAL_DIR}" --recursive \
+              && find "${LOCAL_DIR}" -type f -name '*.overall_export_metadata' -print -quit | grep -q .; then
+
+              cat > "${LOCAL_DIR}/BACKUP_INFO.txt" <<EOF
+          Backup registratore Firestore
+          Data UTC: ${TIMESTAMP}
+          Progetto: ${PROJECT_ID}
+          Database: ${DATABASE_ID}
+          Tentativo riuscito: ${ATTEMPT}/5
+          Origine temporanea: ${GCS_DIR}
+          EOF
+
+              mapfile -t BACKUPS < <(find backup-registratore -mindepth 1 -maxdepth 1 -type d -name 'backup-*' | sort)
+              COUNT="${#BACKUPS[@]}"
+              echo "Backup presenti dopo la creazione: ${COUNT}"
+
+              if (( COUNT >= 5 )); then
+                echo "Soglia 5 raggiunta: elimino i precedenti e mantengo solo ${BACKUP_NAME}."
+                for DIR in "${BACKUPS[@]}"; do
+                  if [[ "${DIR}" != "${LOCAL_DIR}" ]]; then
+                    rm -rf -- "${DIR}"
+                  fi
+                done
               fi
-            done
+
+              git add backup-registratore
+              git commit -m "Backup registratore ${TIMESTAMP} (tentativo ${ATTEMPT})"
+
+              if git push origin HEAD:main; then
+                SUCCESS=1
+                FINAL_BACKUP="${BACKUP_NAME}"
+                gcloud storage rm --recursive "${GCS_DIR}" >/dev/null 2>&1 || true
+                echo "Backup creato con successo nella repo privata: backup-registratore/${BACKUP_NAME}"
+                break
+              fi
+            fi
+
+            echo "::warning::Tentativo ${ATTEMPT}/5 non riuscito."
+            gcloud storage rm --recursive "${GCS_DIR}" >/dev/null 2>&1 || true
+            git reset --hard origin/main >/dev/null 2>&1 || true
+            git clean -fd backup-registratore >/dev/null 2>&1 || true
+
+            if (( ATTEMPT < 5 )); then
+              sleep $((ATTEMPT * 15))
+            fi
+          done
+
+          if (( SUCCESS != 1 )); then
+            echo "::error::Backup non creato dopo 5 tentativi."
+            exit 1
           fi
+
+          echo "backup_name=${FINAL_BACKUP}" >> "${GITHUB_OUTPUT}"
 
       - name: Riepilogo
         shell: bash
-        run: echo "Backup registratore completato: ${{ steps.export.outputs.destination }}"
+        run: |
+          echo "Backup registratore completato nella repo privata."
+          echo "Percorso: backup-registratore/${{ steps.backup.outputs.backup_name }}"
