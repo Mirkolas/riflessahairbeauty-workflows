@@ -1,0 +1,111 @@
+name: Firebase ripristino - registratore
+
+on:
+  workflow_dispatch:
+    inputs:
+      backup_uri:
+        description: "URI backup gs://... da ripristinare; lascia vuoto per usare il piu recente"
+        required: false
+        default: ""
+        type: string
+      conferma:
+        description: "Scrivi RIPRISTINA per confermare"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: firebase-ripristino-registratore
+  cancel-in-progress: false
+
+env:
+  PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID || vars.GCP_PROJECT_ID || 'riflessa-15a20' }}
+  DATABASE_ID: "(default)"
+  BACKUP_BUCKET: ${{ vars.FIRESTORE_BACKUP_BUCKET || vars.BACKUP_BUCKET || 'riflessa-15a20-firestore-backups' }}
+  GOOGLE_CREDENTIALS_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_RIFLESSA_15A20 || secrets.FIREBASE_SERVICE_ACCOUNT || secrets.GCP_CREDENTIALS || secrets.GOOGLE_CREDENTIALS }}
+
+jobs:
+  restore:
+    name: Ripristino Firestore registratore
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Verifica conferma e configurazione
+        shell: bash
+        env:
+          CONFIRMATION: ${{ inputs.conferma }}
+        run: |
+          set -euo pipefail
+          if [[ "${CONFIRMATION}" != "RIPRISTINA" ]]; then
+            echo "::error::Conferma non valida. Scrivere esattamente RIPRISTINA."
+            exit 1
+          fi
+          if [[ -z "${GOOGLE_CREDENTIALS_JSON}" ]]; then
+            echo "::error::Manca il secret con le credenziali Google/Firebase."
+            exit 1
+          fi
+
+      - name: Autenticazione Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ env.GOOGLE_CREDENTIALS_JSON }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Installa Google Cloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Seleziona backup
+        id: backup
+        shell: bash
+        env:
+          REQUESTED_BACKUP: ${{ inputs.backup_uri }}
+        run: |
+          set -euo pipefail
+          gcloud config set project "${PROJECT_ID}" --quiet
+
+          if [[ -n "${REQUESTED_BACKUP}" ]]; then
+            BACKUP_URI="${REQUESTED_BACKUP}"
+          else
+            BACKUP_URI="$(
+              gcloud storage ls "gs://${BACKUP_BUCKET}/registratore/daily/" 2>/dev/null \
+                | grep '/$' \
+                | sort \
+                | tail -n 1
+            )"
+          fi
+
+          if [[ -z "${BACKUP_URI}" ]]; then
+            echo "::error::Nessun backup disponibile."
+            exit 1
+          fi
+
+          case "${BACKUP_URI}" in
+            gs://${BACKUP_BUCKET}/registratore/daily/*) ;;
+            *)
+              echo "::error::Il backup deve appartenere al percorso registratore del bucket configurato."
+              exit 1
+              ;;
+          esac
+
+          gcloud storage ls "${BACKUP_URI}" >/dev/null
+          echo "uri=${BACKUP_URI}" >> "${GITHUB_OUTPUT}"
+
+      - name: Ripristina Firestore dal backup
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Avvio ripristino del database Firestore registratore."
+          gcloud firestore import "${{ steps.backup.outputs.uri }}" \
+            --database="${DATABASE_ID}" \
+            --project="${PROJECT_ID}" \
+            --quiet
+
+      - name: Riepilogo
+        shell: bash
+        run: echo "Ripristino registratore completato dal backup selezionato."

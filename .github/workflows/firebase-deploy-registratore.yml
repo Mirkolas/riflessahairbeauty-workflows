@@ -1,0 +1,116 @@
+name: Firebase deploy - registratore
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch, tag o commit della repo applicativa da pubblicare"
+        required: true
+        default: "main"
+        type: string
+  repository_dispatch:
+    types: [firebase-deploy-registratore]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: firebase-deploy-registratore
+  cancel-in-progress: false
+
+env:
+  PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID || vars.GCP_PROJECT_ID || 'riflessa-15a20' }}
+  SOURCE_REPOSITORY: ${{ vars.APP_REPOSITORY || 'Mirkolas/riflessahairbeauty' }}
+  SOURCE_PAT: ${{ secrets.RIFLESSA_PAT || secrets.REPO_PAT || secrets.GH_PAT || secrets.PAT }}
+  GOOGLE_CREDENTIALS_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_RIFLESSA_15A20 || secrets.FIREBASE_SERVICE_ACCOUNT || secrets.GCP_CREDENTIALS || secrets.GOOGLE_CREDENTIALS }}
+  FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+
+jobs:
+  deploy:
+    name: Deploy Firebase registratore
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Verifica configurazione protetta
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${SOURCE_PAT}" ]]; then
+            echo "::error::Manca il PAT con accesso in lettura alla repo dell'app."
+            exit 1
+          fi
+
+          if [[ -z "${GOOGLE_CREDENTIALS_JSON}" && -z "${FIREBASE_TOKEN}" ]]; then
+            echo "::error::Mancano credenziali Firebase/Google Cloud."
+            exit 1
+          fi
+
+      - name: Determina ref applicazione
+        id: source
+        shell: bash
+        env:
+          MANUAL_REF: ${{ inputs.ref }}
+          DISPATCH_REF: ${{ github.event.client_payload.ref }}
+        run: |
+          set -euo pipefail
+          REF="${MANUAL_REF:-${DISPATCH_REF:-main}}"
+          echo "ref=${REF}" >> "${GITHUB_OUTPUT}"
+
+      - name: Checkout applicazione
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          ref: ${{ steps.source.outputs.ref }}
+          token: ${{ env.SOURCE_PAT }}
+          path: app
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Configura Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Installa dipendenze
+        working-directory: app/riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
+        shell: bash
+        run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Esegui test
+        working-directory: app/riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
+        shell: bash
+        run: npm test
+
+      - name: Verifica progetto
+        working-directory: app/riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
+        shell: bash
+        run: npm run check
+
+      - name: Autenticazione Google Cloud
+        if: env.GOOGLE_CREDENTIALS_JSON != ''
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ env.GOOGLE_CREDENTIALS_JSON }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Deploy Hosting e regole Firestore
+        working-directory: app/riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -n "${GOOGLE_CREDENTIALS_JSON}" ]]; then
+            ./node_modules/.bin/firebase deploy \
+              --project "${PROJECT_ID}" \
+              --only "firestore:rules,hosting:hairbeauty" \
+              --non-interactive
+          else
+            ./node_modules/.bin/firebase deploy \
+              --project "${PROJECT_ID}" \
+              --only "firestore:rules,hosting:hairbeauty" \
+              --token "${FIREBASE_TOKEN}" \
+              --non-interactive
+          fi

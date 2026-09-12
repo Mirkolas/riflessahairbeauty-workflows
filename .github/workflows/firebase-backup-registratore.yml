@@ -1,0 +1,119 @@
+name: Firebase backup - registratore
+
+on:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: firebase-backup-registratore
+  cancel-in-progress: false
+
+env:
+  PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID || vars.GCP_PROJECT_ID || 'riflessa-15a20' }}
+  DATABASE_ID: "(default)"
+  BACKUP_BUCKET: ${{ vars.FIRESTORE_BACKUP_BUCKET || vars.BACKUP_BUCKET || 'riflessa-15a20-firestore-backups' }}
+  GOOGLE_CREDENTIALS_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_RIFLESSA_15A20 || secrets.FIREBASE_SERVICE_ACCOUNT || secrets.GCP_CREDENTIALS || secrets.GOOGLE_CREDENTIALS }}
+
+jobs:
+  backup:
+    name: Backup Firestore registratore
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Verifica configurazione protetta
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${GOOGLE_CREDENTIALS_JSON}" ]]; then
+            echo "::error::Manca il secret con le credenziali Google/Firebase."
+            exit 1
+          fi
+          if [[ -z "${BACKUP_BUCKET}" ]]; then
+            echo "::error::Manca il nome del bucket di backup."
+            exit 1
+          fi
+
+      - name: Autenticazione Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ env.GOOGLE_CREDENTIALS_JSON }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Installa Google Cloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Prepara bucket backup
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud config set project "${PROJECT_ID}" --quiet
+
+          if ! gcloud storage buckets describe "gs://${BACKUP_BUCKET}" >/dev/null 2>&1; then
+            DB_LOCATION="$(gcloud firestore databases describe \
+              --database="${DATABASE_ID}" \
+              --project="${PROJECT_ID}" \
+              --format='value(locationId)')"
+
+            case "${DB_LOCATION}" in
+              nam5) BUCKET_LOCATION="US" ;;
+              eur3) BUCKET_LOCATION="EU" ;;
+              *)    BUCKET_LOCATION="${DB_LOCATION}" ;;
+            esac
+
+            gcloud storage buckets create "gs://${BACKUP_BUCKET}" \
+              --project="${PROJECT_ID}" \
+              --location="${BUCKET_LOCATION}" \
+              --uniform-bucket-level-access
+          fi
+
+      - name: Crea backup completo Firestore
+        id: export
+        shell: bash
+        run: |
+          set -euo pipefail
+          TIMESTAMP="$(date -u +'%Y%m%d-%H%M%S')"
+          DESTINATION="gs://${BACKUP_BUCKET}/registratore/daily/backup-${TIMESTAMP}"
+
+          gcloud firestore export "${DESTINATION}" \
+            --database="${DATABASE_ID}" \
+            --project="${PROJECT_ID}" \
+            --quiet
+
+          echo "destination=${DESTINATION}" >> "${GITHUB_OUTPUT}"
+
+      - name: Retention - al quinto conserva solo il piu recente
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mapfile -t BACKUPS < <(
+            gcloud storage ls "gs://${BACKUP_BUCKET}/registratore/daily/" 2>/dev/null \
+              | grep '/$' \
+              | sort
+          )
+
+          COUNT="${#BACKUPS[@]}"
+          echo "Backup registratore presenti: ${COUNT}"
+
+          if (( COUNT >= 5 )); then
+            NEWEST="${BACKUPS[$((COUNT - 1))]}"
+            echo "Soglia 5 raggiunta: conservo soltanto il backup piu recente."
+
+            for BACKUP_URI in "${BACKUPS[@]}"; do
+              if [[ "${BACKUP_URI}" != "${NEWEST}" ]]; then
+                gcloud storage rm --recursive "${BACKUP_URI}"
+              fi
+            done
+          fi
+
+      - name: Riepilogo
+        shell: bash
+        run: echo "Backup registratore completato: ${{ steps.export.outputs.destination }}"
