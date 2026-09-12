@@ -14,8 +14,6 @@ concurrency:
 
 env:
   PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID }}
-  DATABASE_ID: "(default)"
-  BACKUP_BUCKET: ${{ vars.FIREBASE_PROJECT_ID }}-firestore-backups
   BACKUP_REPOSITORY: Mirkolas/riflessahairbeauty
   SOURCE_PAT: ${{ secrets.PUBLIC_REPO_TOKEN }}
   GOOGLE_CREDENTIALS_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
@@ -33,7 +31,7 @@ jobs:
           set -euo pipefail
           [[ -n "${PROJECT_ID}" ]] || { echo "::error::Manca la Variable FIREBASE_PROJECT_ID."; exit 1; }
           [[ -n "${GOOGLE_CREDENTIALS_JSON}" ]] || { echo "::error::Manca il Secret FIREBASE_SERVICE_ACCOUNT."; exit 1; }
-          [[ -n "${SOURCE_PAT}" ]] || { echo "::error::Manca il Secret PUBLIC_REPO_TOKEN."; exit 1; }
+          [[ -n "${SOURCE_PAT}" ]] || { echo "::error::Manca il Secret PUBLIC_REPO_TOKEN nella repository riflessahairbeauty-workflows."; exit 1; }
 
       - name: Checkout repo privata backup
         uses: actions/checkout@v4
@@ -45,41 +43,93 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Autenticazione Google Cloud
-        uses: google-github-actions/auth@v2
+      - name: Configura Node.js
+        uses: actions/setup-node@v4
         with:
-          credentials_json: ${{ env.GOOGLE_CREDENTIALS_JSON }}
-          create_credentials_file: true
-          export_environment_variables: true
+          node-version: "24"
 
-      - name: Installa Google Cloud CLI
-        uses: google-github-actions/setup-gcloud@v2
-        with:
-          project_id: ${{ env.PROJECT_ID }}
-
-      - name: Prepara bucket temporaneo
+      - name: Installa Firebase Admin SDK
         shell: bash
         run: |
           set -euo pipefail
-          gcloud config set project "${PROJECT_ID}" --quiet
+          mkdir -p "${RUNNER_TEMP}/firestore-backup-tool"
+          cd "${RUNNER_TEMP}/firestore-backup-tool"
+          npm init -y >/dev/null 2>&1
+          npm install firebase-admin@13 --no-audit --no-fund
 
-          if ! gcloud storage buckets describe "gs://${BACKUP_BUCKET}" >/dev/null 2>&1; then
-            DB_LOCATION="$(gcloud firestore databases describe \
-              --database="${DATABASE_ID}" \
-              --project="${PROJECT_ID}" \
-              --format='value(locationId)')"
+      - name: Prepara esportatore Firestore
+        shell: bash
+        run: |
+          cat > "${RUNNER_TEMP}/firestore-backup-tool/export.cjs" <<'NODE'
+          const fs = require('fs');
+          const admin = require('firebase-admin');
 
-            case "${DB_LOCATION}" in
-              nam5) BUCKET_LOCATION="US" ;;
-              eur3) BUCKET_LOCATION="EU" ;;
-              *) BUCKET_LOCATION="${DB_LOCATION}" ;;
-            esac
+          const credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON);
+          admin.initializeApp({
+            credential: admin.credential.cert(credentials),
+            projectId: process.env.PROJECT_ID,
+          });
+          const db = admin.firestore();
 
-            gcloud storage buckets create "gs://${BACKUP_BUCKET}" \
-              --project="${PROJECT_ID}" \
-              --location="${BUCKET_LOCATION}" \
-              --uniform-bucket-level-access
-          fi
+          function encode(value) {
+            if (value === null || value === undefined) return value ?? null;
+            if (value instanceof admin.firestore.Timestamp) {
+              return { __firestoreType: 'timestamp', seconds: value.seconds, nanoseconds: value.nanoseconds };
+            }
+            if (value instanceof admin.firestore.GeoPoint) {
+              return { __firestoreType: 'geopoint', latitude: value.latitude, longitude: value.longitude };
+            }
+            if (value instanceof admin.firestore.DocumentReference) {
+              return { __firestoreType: 'reference', path: value.path };
+            }
+            if (Buffer.isBuffer(value) || value instanceof Uint8Array) {
+              return { __firestoreType: 'bytes', base64: Buffer.from(value).toString('base64') };
+            }
+            if (Array.isArray(value)) return value.map(encode);
+            if (typeof value === 'object') {
+              const result = {};
+              for (const [key, child] of Object.entries(value)) result[key] = encode(child);
+              return result;
+            }
+            return value;
+          }
+
+          const documents = [];
+
+          async function walkCollection(collectionRef) {
+            const snapshot = await collectionRef.get();
+            for (const doc of snapshot.docs) {
+              documents.push({ path: doc.ref.path, data: encode(doc.data()) });
+              const subcollections = await doc.ref.listCollections();
+              for (const subcollection of subcollections) {
+                await walkCollection(subcollection);
+              }
+            }
+          }
+
+          async function main() {
+            const roots = await db.listCollections();
+            for (const collection of roots) await walkCollection(collection);
+            documents.sort((a, b) => a.path.localeCompare(b.path));
+
+            const backup = {
+              format: 'riflessa-firestore-json-v1',
+              projectId: process.env.PROJECT_ID,
+              databaseId: '(default)',
+              createdAt: new Date().toISOString(),
+              documentCount: documents.length,
+              documents,
+            };
+
+            fs.writeFileSync(process.env.OUTPUT_FILE, JSON.stringify(backup, null, 2) + '\n');
+            console.log(`Esportati ${documents.length} documenti Firestore.`);
+          }
+
+          main().catch((error) => {
+            console.error(error);
+            process.exit(1);
+          });
+          NODE
 
       - name: Crea backup con massimo 5 tentativi
         id: backup
@@ -104,16 +154,20 @@ jobs:
             TIMESTAMP="$(date -u +'%Y%m%d-%H%M%S')"
             BACKUP_NAME="backup-${TIMESTAMP}"
             LOCAL_DIR="backup-registratore/${BACKUP_NAME}"
-            GCS_DIR="gs://${BACKUP_BUCKET}/registratore/staging/${BACKUP_NAME}"
+            OUTPUT_FILE="${PWD}/${LOCAL_DIR}/firestore.json"
 
             mkdir -p "${LOCAL_DIR}"
 
-            if gcloud firestore export "${GCS_DIR}" \
-              --database="${DATABASE_ID}" \
-              --project="${PROJECT_ID}" \
-              --quiet \
-              && gcloud storage rsync "${GCS_DIR}" "${LOCAL_DIR}" --recursive \
-              && [[ -f "${LOCAL_DIR}/${BACKUP_NAME}.overall_export_metadata" ]]; then
+            if OUTPUT_FILE="${OUTPUT_FILE}" node "${RUNNER_TEMP}/firestore-backup-tool/export.cjs" \
+              && node -e "const b=require(process.argv[1]); if(b.format!=='riflessa-firestore-json-v1'||!Array.isArray(b.documents)) process.exit(1); console.log('Backup JSON verificato:', b.documentCount, 'documenti');" "${OUTPUT_FILE}"; then
+
+              cat > "${LOCAL_DIR}/BACKUP_INFO.txt" <<EOF
+          Backup registratore Firestore
+          Data UTC: ${TIMESTAMP}
+          Progetto: ${PROJECT_ID}
+          Formato: riflessa-firestore-json-v1
+          Tentativo riuscito: ${ATTEMPT}/5
+          EOF
 
               mapfile -t BACKUPS < <(find backup-registratore -mindepth 1 -maxdepth 1 -type d -name 'backup-*' | sort)
               COUNT="${#BACKUPS[@]}"
@@ -134,14 +188,12 @@ jobs:
               if git push origin HEAD:main; then
                 SUCCESS=1
                 FINAL_BACKUP="${BACKUP_NAME}"
-                gcloud storage rm --recursive "${GCS_DIR}" >/dev/null 2>&1 || true
                 echo "Backup creato con successo nella repo privata: backup-registratore/${BACKUP_NAME}"
                 break
               fi
             fi
 
             echo "::warning::Tentativo ${ATTEMPT}/5 non riuscito."
-            gcloud storage rm --recursive "${GCS_DIR}" >/dev/null 2>&1 || true
             git reset --hard origin/main >/dev/null 2>&1 || true
             git clean -fd -- backup-registratore >/dev/null 2>&1 || true
 
