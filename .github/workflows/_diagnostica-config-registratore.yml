@@ -17,12 +17,16 @@ jobs:
       - name: Cerca PAT configurato
         shell: bash
         env:
-          P1: ${{ secrets.PAT_GITHUB }}
-          P2: ${{ secrets.TOKEN_GITHUB }}
-          P3: ${{ secrets.PAT_RIFLESSA }}
-          P4: ${{ secrets.RIFLESSA_TOKEN }}
+          P1: ${{ secrets.PAT_REPO }}
+          P2: ${{ secrets.PAT_WORKFLOWS }}
+          P3: ${{ secrets.TOKEN_PAT }}
+          P4: ${{ secrets.GITHUB_ACCESS_TOKEN }}
+          P5: ${{ secrets.REPO_TOKEN }}
+          P6: ${{ secrets.WORKFLOW_TOKEN }}
         run: |
-          [[ -n "$P1" ]] && echo "FOUND_SECRET=PAT_GITHUB" || true
-          [[ -n "$P2" ]] && echo "FOUND_SECRET=TOKEN_GITHUB" || true
-          [[ -n "$P3" ]] && echo "FOUND_SECRET=PAT_RIFLESSA" || true
-          [[ -n "$P4" ]] && echo "FOUND_SECRET=RIFLESSA_TOKEN" || true
+          [[ -n "$P1" ]] && echo "FOUND_SECRET=PAT_REPO" || true
+          [[ -n "$P2" ]] && echo "FOUND_SECRET=PAT_WORKFLOWS" || true
+          [[ -n "$P3" ]] && echo "FOUND_SECRET=TOKEN_PAT" || true
+          [[ -n "$P4" ]] && echo "FOUND_SECRET=GITHUB_ACCESS_TOKEN" || true
+          [[ -n "$P5" ]] && echo "FOUND_SECRET=REPO_TOKEN" || true
+          [[ -n "$P6" ]] && echo "FOUND_SECRET=WORKFLOW_TOKEN" || true
