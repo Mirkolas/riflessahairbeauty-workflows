@@ -108,12 +108,12 @@ jobs:
 
             git fetch origin main
             git reset --hard origin/main
-            git clean -fd backup-registratore
+            git clean -fd -- backup-registratore
 
             TIMESTAMP="$(date -u +'%Y%m%d-%H%M%S')"
             BACKUP_NAME="backup-${TIMESTAMP}"
             LOCAL_DIR="backup-registratore/${BACKUP_NAME}"
-            GCS_DIR="gs://${BACKUP_BUCKET}/registratore/staging/${BACKUP_NAME}-attempt-${ATTEMPT}"
+            GCS_DIR="gs://${BACKUP_BUCKET}/registratore/staging/${BACKUP_NAME}"
 
             mkdir -p "${LOCAL_DIR}"
 
@@ -122,16 +122,7 @@ jobs:
               --project="${PROJECT_ID}" \
               --quiet \
               && gcloud storage rsync "${GCS_DIR}" "${LOCAL_DIR}" --recursive \
-              && find "${LOCAL_DIR}" -type f -name '*.overall_export_metadata' -print -quit | grep -q .; then
-
-              cat > "${LOCAL_DIR}/BACKUP_INFO.txt" <<EOF
-          Backup registratore Firestore
-          Data UTC: ${TIMESTAMP}
-          Progetto: ${PROJECT_ID}
-          Database: ${DATABASE_ID}
-          Tentativo riuscito: ${ATTEMPT}/5
-          Origine temporanea: ${GCS_DIR}
-          EOF
+              && [[ -f "${LOCAL_DIR}/${BACKUP_NAME}.overall_export_metadata" ]]; then
 
               mapfile -t BACKUPS < <(find backup-registratore -mindepth 1 -maxdepth 1 -type d -name 'backup-*' | sort)
               COUNT="${#BACKUPS[@]}"
@@ -161,7 +152,7 @@ jobs:
             echo "::warning::Tentativo ${ATTEMPT}/5 non riuscito."
             gcloud storage rm --recursive "${GCS_DIR}" >/dev/null 2>&1 || true
             git reset --hard origin/main >/dev/null 2>&1 || true
-            git clean -fd backup-registratore >/dev/null 2>&1 || true
+            git clean -fd -- backup-registratore >/dev/null 2>&1 || true
 
             if (( ATTEMPT < 5 )); then
               sleep $((ATTEMPT * 15))
