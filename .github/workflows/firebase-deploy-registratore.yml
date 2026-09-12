@@ -19,11 +19,11 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID || vars.GCP_PROJECT_ID || 'riflessa-15a20' }}
-  SOURCE_REPOSITORY: ${{ vars.APP_REPOSITORY || 'Mirkolas/riflessahairbeauty' }}
-  SOURCE_PAT: ${{ secrets.RIFLESSA_PAT || secrets.REPO_PAT || secrets.GH_PAT || secrets.PAT }}
-  GOOGLE_CREDENTIALS_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_RIFLESSA_15A20 || secrets.FIREBASE_SERVICE_ACCOUNT || secrets.GCP_CREDENTIALS || secrets.GOOGLE_CREDENTIALS }}
-  FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+  PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID }}
+  HOSTING_TARGET: ${{ vars.FIREBASE_HOSTING_TARGET }}
+  SOURCE_REPOSITORY: Mirkolas/riflessahairbeauty
+  SOURCE_PAT: ${{ secrets.PUBLIC_REPO_TOKEN }}
+  GOOGLE_CREDENTIALS_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
 
 jobs:
   deploy:
@@ -36,14 +36,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -z "${SOURCE_PAT}" ]]; then
-            echo "::error::Manca il PAT con accesso in lettura alla repo dell'app."
-            exit 1
-          fi
-          if [[ -z "${GOOGLE_CREDENTIALS_JSON}" && -z "${FIREBASE_TOKEN}" ]]; then
-            echo "::error::Mancano credenziali Firebase/Google Cloud."
-            exit 1
-          fi
+          [[ -n "${PROJECT_ID}" ]] || { echo "::error::Manca la Variable FIREBASE_PROJECT_ID."; exit 1; }
+          [[ -n "${HOSTING_TARGET}" ]] || { echo "::error::Manca la Variable FIREBASE_HOSTING_TARGET."; exit 1; }
+          [[ "${HOSTING_TARGET}" == "registratore" ]] || { echo "::error::FIREBASE_HOSTING_TARGET deve essere registratore."; exit 1; }
+          [[ -n "${SOURCE_PAT}" ]] || { echo "::error::Manca il Secret PUBLIC_REPO_TOKEN."; exit 1; }
+          [[ -n "${GOOGLE_CREDENTIALS_JSON}" ]] || { echo "::error::Manca il Secret FIREBASE_SERVICE_ACCOUNT."; exit 1; }
 
       - name: Determina ref applicazione
         id: source
@@ -87,7 +84,6 @@ jobs:
         run: npm run check
 
       - name: Autenticazione Google Cloud
-        if: env.GOOGLE_CREDENTIALS_JSON != ''
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ env.GOOGLE_CREDENTIALS_JSON }}
@@ -99,15 +95,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -n "${GOOGLE_CREDENTIALS_JSON}" ]]; then
-            ./node_modules/.bin/firebase deploy \
-              --project "${PROJECT_ID}" \
-              --only "firestore:rules,hosting:registratore" \
-              --non-interactive
-          else
-            ./node_modules/.bin/firebase deploy \
-              --project "${PROJECT_ID}" \
-              --only "firestore:rules,hosting:registratore" \
-              --token "${FIREBASE_TOKEN}" \
-              --non-interactive
-          fi
+          ./node_modules/.bin/firebase deploy \
+            --project "${PROJECT_ID}" \
+            --only "firestore:rules,hosting:${HOSTING_TARGET}" \
+            --non-interactive
