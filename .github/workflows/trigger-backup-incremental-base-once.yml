@@ -1,0 +1,20 @@
+name: Crea base backup incrementale - una tantum
+
+on:
+  push:
+    paths:
+      - ".github/workflows/trigger-backup-incremental-base-once.yml"
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  trigger:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Avvia backup registratore manuale
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run firebase-backup-registratore.yml --repo Mirkolas/riflessahairbeauty-workflows --ref main
