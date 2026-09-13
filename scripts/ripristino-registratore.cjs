@@ -69,8 +69,14 @@ function hashTree(root) {
 }
 
 const credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON);
+const EMULATOR_MODE = String(process.env.RIFLESSA_RESTORE_EMULATOR || '') === '1';
 if (!TARGET_PROJECT_ID) throw new Error('PROJECT_ID target non impostato');
-if (credentials.project_id && credentials.project_id !== TARGET_PROJECT_ID) throw new Error(`Service account ${credentials.project_id} non corrisponde al target ${TARGET_PROJECT_ID}`);
+if (EMULATOR_MODE) {
+  if (!process.env.FIRESTORE_EMULATOR_HOST || !process.env.FIREBASE_AUTH_EMULATOR_HOST) throw new Error('Modalita emulator richiede Firestore e Auth Emulator');
+  if (TARGET_PROJECT_ID === BACKUP_PROJECT_ID) throw new Error('Blocco sicurezza emulator: target uguale al progetto sorgente');
+} else if (credentials.project_id && credentials.project_id !== TARGET_PROJECT_ID) {
+  throw new Error(`Service account ${credentials.project_id} non corrisponde al target ${TARGET_PROJECT_ID}`);
+}
 if (String(process.env.REQUIRE_DIFFERENT_TARGET || '') === '1' && TARGET_PROJECT_ID === BACKUP_PROJECT_ID) throw new Error('Blocco sicurezza: il progetto test coincide con il progetto sorgente');
 admin.initializeApp({ credential: admin.credential.cert(credentials), projectId: TARGET_PROJECT_ID });
 const db = admin.firestore();
