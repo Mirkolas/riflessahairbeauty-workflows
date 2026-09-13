@@ -1,0 +1,49 @@
+name: Avvia una volta build EXE privata
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/_trigger-private-exe-build.yml"
+
+permissions:
+  contents: read
+
+env:
+  SOURCE_PAT: ${{ secrets.PUBLIC_REPO_TOKEN }}
+  APP_DIR: riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo privata
+        uses: actions/checkout@v4
+        with:
+          repository: Mirkolas/riflessahairbeauty
+          ref: main
+          token: ${{ env.SOURCE_PAT }}
+          path: app
+          persist-credentials: true
+
+      - name: Completa metadati e avvia build privata
+        working-directory: app
+        shell: bash
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const fs = require('fs');
+          const p = process.env.APP_DIR + '/package.json';
+          const pkg = JSON.parse(fs.readFileSync(p, 'utf8'));
+          pkg.author = 'Riflessa Hair & Beauty';
+          fs.writeFileSync(p, JSON.stringify(pkg, null, 2) + '\n');
+          NODE
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "${APP_DIR}/package.json"
+          if git diff --cached --quiet; then
+            echo "Metadati già presenti; nessun push necessario."
+          else
+            git commit -m "Completa metadati build Windows registratore"
+            git push origin HEAD:main
+          fi
