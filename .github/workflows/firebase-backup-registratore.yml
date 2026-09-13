@@ -3,7 +3,7 @@ name: Firebase backup - registratore
 on:
   schedule:
     # GitHub cron usa UTC. I due orari coprono ora legale/solare italiana;
-    # il primo step esegue davvero il backup solo quando Europe/Rome e domenica ore 00.
+    # il gate esegue davvero il backup solo quando in Europe/Rome e domenica ore 00.
     - cron: "0 22 * * 6"
     - cron: "0 23 * * 6"
   workflow_dispatch:
@@ -24,7 +24,7 @@ env:
 
 jobs:
   backup:
-    name: Backup registratore
+    name: Backup registratore checkpoint/resume
     runs-on: ubuntu-latest
     timeout-minutes: 120
 
@@ -39,18 +39,16 @@ jobs:
             echo "Avvio manuale autorizzato."
             exit 0
           fi
-
           LOCAL_DAY="$(TZ=Europe/Rome date +%u)"
           LOCAL_HOUR="$(TZ=Europe/Rome date +%H)"
           LOCAL_NOW="$(TZ=Europe/Rome date +'%Y-%m-%d %H:%M:%S %Z')"
           echo "Ora italiana: ${LOCAL_NOW}"
-
           if [[ "${LOCAL_DAY}" == "7" && "${LOCAL_HOUR}" == "00" ]]; then
             echo "run=true" >> "${GITHUB_OUTPUT}"
-            echo "E domenica a mezzanotte in Italia: eseguo il backup."
+            echo "Domenica a mezzanotte in Italia: avvio backup."
           else
             echo "run=false" >> "${GITHUB_OUTPUT}"
-            echo "Questo e il passaggio UTC non corrispondente alla mezzanotte italiana: nessun backup."
+            echo "Passaggio UTC non corrispondente alla mezzanotte italiana: nessun backup."
           fi
 
       - name: Verifica configurazione protetta
@@ -95,7 +93,7 @@ jobs:
           mkdir -p "${RUNNER_TEMP}/registratore-backup-tool"
           npm install --prefix "${RUNNER_TEMP}/registratore-backup-tool" firebase-admin@13 --no-audit --no-fund >/dev/null
 
-      - name: Crea backup con massimo 5 tentativi
+      - name: Crea backup con checkpoint, resume e massimo 4 tentativi
         if: steps.schedule_gate.outputs.run == 'true'
         id: backup
         working-directory: backup-repo
@@ -111,96 +109,79 @@ jobs:
           FINAL_BACKUP=""
           FINAL_MODE=""
           APP_DIR="riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions"
-          EXPORTER="${GITHUB_WORKSPACE}/workflow-src/scripts/backup-registratore.cjs"
+          ORCHESTRATOR="${GITHUB_WORKSPACE}/workflow-src/scripts/backup-registratore-v3.cjs"
+          VERIFIER="${GITHUB_WORKSPACE}/workflow-src/scripts/verifica-backup-registratore.cjs"
+          CHECKPOINT_DIR="${RUNNER_TEMP}/registratore-backup-checkpoint"
+          SOURCE_COMMIT="$(git rev-parse HEAD)"
+          RUN_TIMESTAMP="$(date -u +'%Y%m%d-%H%M%S')"
+          BACKUP_NAME="backup-${RUN_TIMESTAMP}"
+          FINAL_DIR="${PWD}/backup-registratore/${BACKUP_NAME}"
 
-          for ATTEMPT in 1 2 3 4 5; do
-            echo "Tentativo backup ${ATTEMPT}/5"
+          rm -rf "${CHECKPOINT_DIR}"
+          mkdir -p "${CHECKPOINT_DIR}/source-app"
+          rsync -a --delete --exclude node_modules --exclude dist "${APP_DIR}/" "${CHECKPOINT_DIR}/source-app/"
+
+          PREVIOUS_BACKUP_DIR="$(find backup-registratore -mindepth 1 -maxdepth 1 -type d -name 'backup-*' | sort | tail -n 1)"
+          PREVIOUS_BACKUP_NAME=""
+          PREVIOUS_BACKUP_ABS=""
+          if [[ -n "${PREVIOUS_BACKUP_DIR}" ]]; then
+            PREVIOUS_BACKUP_NAME="$(basename "${PREVIOUS_BACKUP_DIR}")"
+            PREVIOUS_BACKUP_ABS="${PWD}/${PREVIOUS_BACKUP_DIR}"
+            echo "Base precedente: ${PREVIOUS_BACKUP_NAME}"
+          else
+            echo "Nessuna base precedente: il primo backup v3 sara completo."
+          fi
+
+          for ATTEMPT in 1 2 3 4; do
+            echo "===== Tentativo backup ${ATTEMPT}/4 ====="
             git fetch origin main
             git reset --hard origin/main
-            git clean -fd -- backup-registratore
+            rm -rf "${FINAL_DIR}"
 
-            PREVIOUS_BACKUP_DIR="$(find backup-registratore -mindepth 1 -maxdepth 1 -type d -name 'backup-*' | sort | tail -n 1)"
-            PREVIOUS_BACKUP_NAME=""
-            PREVIOUS_BACKUP_ABS=""
-            if [[ -n "${PREVIOUS_BACKUP_DIR}" ]]; then
-              PREVIOUS_BACKUP_NAME="$(basename "${PREVIOUS_BACKUP_DIR}")"
-              PREVIOUS_BACKUP_ABS="${PWD}/${PREVIOUS_BACKUP_DIR}"
-              echo "Base precedente: ${PREVIOUS_BACKUP_NAME}"
-            else
-              echo "Nessuna base precedente: il backup sara completo."
-            fi
-
-            SOURCE_COMMIT="$(git rev-parse HEAD)"
-            TIMESTAMP="$(date -u +'%Y%m%d-%H%M%S')"
-            BACKUP_NAME="backup-${TIMESTAMP}"
-            LOCAL_DIR="backup-registratore/${BACKUP_NAME}"
-            mkdir -p "${LOCAL_DIR}/app-config/config" "${LOCAL_DIR}/app-config/js"
-
-            if OUTPUT_DIR="${PWD}/${LOCAL_DIR}" \
-              SOURCE_COMMIT="${SOURCE_COMMIT}" \
+            if CHECKPOINT_DIR="${CHECKPOINT_DIR}" \
+              FINAL_DIR="${FINAL_DIR}" \
               PREVIOUS_BACKUP_DIR="${PREVIOUS_BACKUP_ABS}" \
               PREVIOUS_BACKUP_NAME="${PREVIOUS_BACKUP_NAME}" \
-              node "${EXPORTER}"; then
+              SOURCE_APP_DIR="${CHECKPOINT_DIR}/source-app" \
+              SOURCE_COMMIT="${SOURCE_COMMIT}" \
+              BACKUP_NAME="${BACKUP_NAME}" \
+              ATTEMPT="${ATTEMPT}" \
+              node "${ORCHESTRATOR}"; then
 
-              cp "${APP_DIR}/.firebaserc" "${LOCAL_DIR}/app-config/.firebaserc"
-              cp "${APP_DIR}/firebase.json" "${LOCAL_DIR}/app-config/firebase.json"
-              cp "${APP_DIR}/firestore.rules" "${LOCAL_DIR}/app-config/firestore.rules"
-              cp "${APP_DIR}/package.json" "${LOCAL_DIR}/app-config/package.json"
-              cp "${APP_DIR}/config/default-axon-profile.json" "${LOCAL_DIR}/app-config/config/default-axon-profile.json"
-              cp "${APP_DIR}/js/firebase-config.js" "${LOCAL_DIR}/app-config/js/firebase-config.js"
-              printf '%s\n' "${SOURCE_COMMIT}" > "${LOCAL_DIR}/SOURCE_COMMIT.txt"
-
-              if node -e "const m=require('./${LOCAL_DIR}/manifest.json'); if(m.format!=='riflessa-registratore-backup-v2'||m.firestore?.documentCount===undefined||!m.firestore?.journalCursor||m.authentication?.accountCount===undefined) process.exit(1); console.log('Manifest backup verificato:',m.firestore.backupMode);" \
-                && node -e "const a=require('./${LOCAL_DIR}/authentication.enc.json'); if(a.format!=='riflessa-firebase-auth-aes256gcm-v1'||!a.ciphertext||!a.authTag) process.exit(1); console.log('Authentication cifrata verificata.');" \
-                && test -f "${LOCAL_DIR}/firestore/manifest.json"; then
-
-                BACKUP_MODE="$(node -p "require('./${LOCAL_DIR}/manifest.json').firestore.backupMode || 'full'")"
-                JOURNAL_READS="$(node -p "require('./${LOCAL_DIR}/manifest.json').firestore.journalDocumentsRead || 0")"
-                CHANGED_PATHS="$(node -p "require('./${LOCAL_DIR}/manifest.json').firestore.changedPaths || 0")"
-
-                cat > "${LOCAL_DIR}/BACKUP_INFO.txt" <<EOF
-          Backup registratore
-          Data UTC: ${TIMESTAMP}
-          Progetto: ${PROJECT_ID}
-          Commit applicazione: ${SOURCE_COMMIT}
-          Modalita Firestore: ${BACKUP_MODE}
-          Base precedente: ${PREVIOUS_BACKUP_NAME:-nessuna}
-          Record journal letti: ${JOURNAL_READS}
-          Documenti/path modificati verificati: ${CHANGED_PATHS}
-          Contenuto finale: snapshot Firestore completo e autonomo, Authentication cifrata con hash password, log registratore sincronizzati, configurazione applicazione.
-          Tentativo riuscito: ${ATTEMPT}/5
-          EOF
+              if BACKUP_PATH="${FINAL_DIR}" node "${VERIFIER}"; then
+                BACKUP_MODE="$(node -p "require('${FINAL_DIR}/manifest.json').backupMode || 'full'")"
 
                 mapfile -t BACKUPS < <(find backup-registratore -mindepth 1 -maxdepth 1 -type d -name 'backup-*' | sort)
                 COUNT="${#BACKUPS[@]}"
                 if (( COUNT > 5 )); then
                   REMOVE_COUNT=$((COUNT - 5))
                   echo "Retention: mantengo gli ultimi 5 backup e rimuovo ${REMOVE_COUNT} backup piu vecchi."
-                  for ((I=0; I<REMOVE_COUNT; I++)); do
-                    rm -rf -- "${BACKUPS[$I]}"
-                  done
+                  for ((I=0; I<REMOVE_COUNT; I++)); do rm -rf -- "${BACKUPS[$I]}"; done
                 fi
 
                 git add backup-registratore
-                git commit -m "Backup registratore ${TIMESTAMP} (${BACKUP_MODE}, tentativo ${ATTEMPT})"
+                git commit -m "Backup registratore ${RUN_TIMESTAMP} (${BACKUP_MODE}, checkpoint/resume, tentativo ${ATTEMPT})"
                 if git push origin HEAD:main; then
+                  # Il checkpoint viene eliminato solo dopo archivio cifrato riletto/verificato e push riuscito.
+                  rm -rf "${CHECKPOINT_DIR}"
                   SUCCESS=1
                   FINAL_BACKUP="${BACKUP_NAME}"
                   FINAL_MODE="${BACKUP_MODE}"
-                  echo "Backup creato: backup-registratore/${BACKUP_NAME} (${BACKUP_MODE})"
+                  echo "Backup definitivo creato: backup-registratore/${BACKUP_NAME}"
                   break
                 fi
               fi
             fi
 
-            echo "::warning::Tentativo ${ATTEMPT}/5 non riuscito."
+            echo "::warning::Tentativo ${ATTEMPT}/4 non riuscito. Il checkpoint resta disponibile per il resume."
             git reset --hard origin/main >/dev/null 2>&1 || true
-            git clean -fd -- backup-registratore >/dev/null 2>&1 || true
-            if (( ATTEMPT < 5 )); then sleep $((ATTEMPT * 15)); fi
+            rm -rf "${FINAL_DIR}"
+            if (( ATTEMPT < 4 )); then sleep 5; fi
           done
 
           if (( SUCCESS != 1 )); then
-            echo "::error::Backup non creato dopo 5 tentativi."
+            echo "::error::Backup domenicale non completato dopo 4 tentativi."
+            echo "Checkpoint mantenuto fino alla fine del job per diagnosi; nessun backup parziale viene pubblicato."
             exit 1
           fi
 
@@ -212,5 +193,7 @@ jobs:
         shell: bash
         run: |
           echo "Backup registratore riuscito."
+          echo "Sequenza: Firestore -> checkpoint -> Auth -> checkpoint -> Hosting -> checkpoint -> Log -> archivio finale cifrato -> rilettura -> verifica."
+          echo "Tentativi massimi: 4."
           echo "Modalita: ${{ steps.backup.outputs.backup_mode }}"
           echo "Percorso: backup-registratore/${{ steps.backup.outputs.backup_name }}"
