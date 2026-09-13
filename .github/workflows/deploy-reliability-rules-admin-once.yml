@@ -1,0 +1,49 @@
+name: Deploy regole affidabilita via Admin SDK una tantum
+
+on:
+  push:
+    paths:
+      - '.github/workflows/deploy-reliability-rules-admin-once.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID }}
+      GOOGLE_CREDENTIALS_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: Mirkolas/riflessahairbeauty
+          ref: main
+          token: ${{ secrets.PUBLIC_REPO_TOKEN }}
+          path: apprepo
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Pubblica Firestore Rules senza controllo Service Usage
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "$PROJECT_ID" ]] || { echo '::error::FIREBASE_PROJECT_ID mancante'; exit 1; }
+          [[ -n "$GOOGLE_CREDENTIALS_JSON" ]] || { echo '::error::FIREBASE_SERVICE_ACCOUNT mancante'; exit 1; }
+          TOOL="$RUNNER_TEMP/rules-admin"
+          npm install --prefix "$TOOL" firebase-admin@13 --no-audit --no-fund >/dev/null
+          RULES="$GITHUB_WORKSPACE/apprepo/riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions/firestore.rules"
+          RULES="$RULES" NODE_PATH="$TOOL/node_modules" node <<'NODE'
+          const fs=require('fs');
+          const admin=require('firebase-admin');
+          const credentials=JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON);
+          if(credentials.project_id && credentials.project_id!==process.env.PROJECT_ID) throw new Error(`Service account ${credentials.project_id} diverso da ${process.env.PROJECT_ID}`);
+          admin.initializeApp({credential:admin.credential.cert(credentials),projectId:process.env.PROJECT_ID});
+          const source=fs.readFileSync(process.env.RULES,'utf8');
+          (async()=>{
+            const ruleset=await admin.securityRules().releaseFirestoreRulesetFromSource(source);
+            console.log(`Firestore Rules pubblicate: ${ruleset?.name||'release aggiornata'}`);
+          })().catch(e=>{console.error(e);process.exit(1)});
+          NODE
