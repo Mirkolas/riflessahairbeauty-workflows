@@ -1,0 +1,46 @@
+name: Patch restore emulator mode una tantum
+
+on:
+  push:
+    paths:
+      - '.github/workflows/patch-restore-emulator-mode-once.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Aggiunge guard emulator al restore
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('scripts/ripristino-registratore.cjs')
+          s=p.read_text()
+          old="const credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON);\nif (!TARGET_PROJECT_ID) throw new Error('PROJECT_ID target non impostato');\nif (credentials.project_id && credentials.project_id !== TARGET_PROJECT_ID) throw new Error(`Service account ${credentials.project_id} non corrisponde al target ${TARGET_PROJECT_ID}`);\nif (String(process.env.REQUIRE_DIFFERENT_TARGET || '') === '1' && TARGET_PROJECT_ID === BACKUP_PROJECT_ID) throw new Error('Blocco sicurezza: il progetto test coincide con il progetto sorgente');\nadmin.initializeApp({ credential: admin.credential.cert(credentials), projectId: TARGET_PROJECT_ID });"
+          new="const credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON);\nconst EMULATOR_MODE = String(process.env.RIFLESSA_RESTORE_EMULATOR || '') === '1';\nif (!TARGET_PROJECT_ID) throw new Error('PROJECT_ID target non impostato');\nif (EMULATOR_MODE) {\n  if (!process.env.FIRESTORE_EMULATOR_HOST || !process.env.FIREBASE_AUTH_EMULATOR_HOST) throw new Error('Modalita emulator richiede Firestore e Auth Emulator');\n  if (TARGET_PROJECT_ID === BACKUP_PROJECT_ID) throw new Error('Blocco sicurezza emulator: target uguale al progetto sorgente');\n} else if (credentials.project_id && credentials.project_id !== TARGET_PROJECT_ID) {\n  throw new Error(`Service account ${credentials.project_id} non corrisponde al target ${TARGET_PROJECT_ID}`);\n}\nif (String(process.env.REQUIRE_DIFFERENT_TARGET || '') === '1' && TARGET_PROJECT_ID === BACKUP_PROJECT_ID) throw new Error('Blocco sicurezza: il progetto test coincide con il progetto sorgente');\nadmin.initializeApp({ credential: admin.credential.cert(credentials), projectId: TARGET_PROJECT_ID });"
+          if s.count(old)!=1:
+              raise SystemExit(f'guard restore: atteso 1 match, trovati {s.count(old)}')
+          p.write_text(s.replace(old,new,1))
+          PY
+          node --check scripts/ripristino-registratore.cjs
+          git diff --check
+      - name: Commit patch e rimuovi workflow temporaneo
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add scripts/ripristino-registratore.cjs
+          git rm .github/workflows/patch-restore-emulator-mode-once.yml
+          git commit -m 'Aggiunge restore isolato per Firebase Emulator Suite'
+          git push origin HEAD:main
