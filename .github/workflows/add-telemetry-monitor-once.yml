@@ -1,0 +1,237 @@
+name: Aggiunge telemetria e monitor remoto una tantum
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/add-telemetry-monitor-once.yml'
+
+permissions:
+  contents: read
+
+env:
+  SOURCE_REPOSITORY: Mirkolas/riflessahairbeauty
+  APP_DIR: riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
+  SOURCE_PAT: ${{ secrets.PUBLIC_REPO_TOKEN }}
+  PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID }}
+  FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+
+jobs:
+  patch-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          ref: main
+          token: ${{ env.SOURCE_PAT }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Applica telemetria 3.5.8
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$APP_DIR"
+          npm version 3.5.8 --no-git-tag-version
+          sed -i 's/3\.5\.7/3.5.8/g' scripts/check-project.js
+
+          cat > js/device-telemetry.js <<'EOF'
+          import { getApps } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+          import { getAuth, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+          import { getFirestore, doc, setDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
+
+          const DEVICE_KEY = 'riflessaDeviceTelemetryIdV1';
+          const LABEL_KEY = 'riflessaDeviceTelemetryLabelV1';
+          const HEARTBEAT_MS = 5 * 60 * 1000;
+
+          function getDeviceId() {
+            let id = localStorage.getItem(DEVICE_KEY);
+            if (!id) {
+              id = (crypto?.randomUUID?.() || `device-${Date.now()}-${Math.random().toString(16).slice(2)}`).replace(/[^a-zA-Z0-9_-]/g, '');
+              localStorage.setItem(DEVICE_KEY, id);
+            }
+            return id;
+          }
+
+          function getDeviceLabel() {
+            let label = String(localStorage.getItem(LABEL_KEY) || '').trim();
+            if (!label) {
+              label = 'Registratore Salone';
+              localStorage.setItem(LABEL_KEY, label);
+            }
+            return label.slice(0, 80);
+          }
+
+          async function readTechnicalState() {
+            let operational = {};
+            let rtReachable = null;
+            try { operational = await window.axonPrinter?.getOperationalState?.() || {}; } catch {}
+            try {
+              const rt = await window.axonPrinter?.testConnection?.();
+              rtReachable = Boolean(rt?.ok);
+            } catch { rtReachable = false; }
+            const idem = operational?.idempotency || {};
+            return {
+              appVersion: String(operational?.appVersion || document.querySelector('meta[name="app-version"]')?.content || '3.5.8'),
+              fiscalQueueDepth: Number(operational?.queueDepth || 0),
+              fiscalActiveLabel: String(operational?.activeFiscalOperation || operational?.activeLabel || '').slice(0, 120),
+              idempotencyInflight: Number(idem?.inflight || 0),
+              idempotencyUncertain: Number(idem?.uncertain || 0),
+              idempotencyUnresolved: Number(idem?.unresolved || idem?.unresolvedCount || 0),
+              rtReachable
+            };
+          }
+
+          function localRecoveryCount() {
+            try {
+              const rows = JSON.parse(localStorage.getItem('riflessaFiscalRecoveryV355') || '[]');
+              return Array.isArray(rows) ? rows.length : 0;
+            } catch { return 0; }
+          }
+
+          function activeIntentPresent() {
+            try { return Boolean(JSON.parse(localStorage.getItem('riflessaFiscalActiveIntentV356') || 'null')); }
+            catch { return false; }
+          }
+
+          async function sendHeartbeat(user) {
+            if (!user) return;
+            const app = getApps()[0];
+            if (!app) return;
+            const db = getFirestore(app);
+            const technical = await readTechnicalState();
+            const payload = {
+              schemaVersion: 1,
+              deviceId: getDeviceId(),
+              deviceLabel: getDeviceLabel(),
+              operatorUid: user.uid,
+              appVersion: technical.appVersion,
+              platform: 'windows',
+              channel: 'stable',
+              rtReachable: technical.rtReachable,
+              fiscalQueueDepth: technical.fiscalQueueDepth,
+              fiscalActiveLabel: technical.fiscalActiveLabel,
+              idempotencyInflight: technical.idempotencyInflight,
+              idempotencyUncertain: technical.idempotencyUncertain,
+              idempotencyUnresolved: technical.idempotencyUnresolved,
+              localRecoveryCount: localRecoveryCount(),
+              activeFiscalIntent: activeIntentPresent(),
+              lastSeenAt: serverTimestamp(),
+              lastSeenAtClient: new Date().toISOString()
+            };
+            await setDoc(doc(db, 'deviceStatus', payload.deviceId), payload, { merge: true });
+          }
+
+          let timer = null;
+          function start(user) {
+            if (timer) clearInterval(timer);
+            sendHeartbeat(user).catch(() => {});
+            timer = setInterval(() => sendHeartbeat(user).catch(() => {}), HEARTBEAT_MS);
+          }
+          function stop() { if (timer) clearInterval(timer); timer = null; }
+
+          const app = getApps()[0];
+          if (app) {
+            const auth = getAuth(app);
+            onAuthStateChanged(auth, user => user ? start(user) : stop());
+            window.addEventListener('beforeunload', stop, { once:true });
+          }
+          EOF
+
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('electron/preload.js')
+          s=p.read_text()
+          needle="  appendModule('riflessa-reliability-dashboard', './js/reliability-dashboard.js');\n"
+          add=needle+"  appendModule('riflessa-device-telemetry', './js/device-telemetry.js');\n"
+          if needle not in s: raise SystemExit('preload anchor not found')
+          p.write_text(s.replace(needle,add,1))
+          PY
+
+          cat > monitor.html <<'EOF'
+          <!doctype html>
+          <html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Riflessa · Monitor registratore</title>
+          <style>
+          body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:#f7f4f1;color:#201a17;margin:0}.wrap{max-width:1100px;margin:0 auto;padding:32px 20px}.card{background:white;border:1px solid #e7dfd9;border-radius:16px;padding:20px;margin-bottom:16px;box-shadow:0 3px 12px #0000000a}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}.metric{background:#faf8f6;border-radius:12px;padding:14px}.ok{color:#18794e;font-weight:700}.bad{color:#b42318;font-weight:700}.warn{color:#a15c00;font-weight:700}input,button{font:inherit;padding:11px 12px;border-radius:10px;border:1px solid #cfc5be}button{cursor:pointer;background:#201a17;color:white}.hidden{display:none}small{color:#766a64}.row{display:flex;gap:10px;flex-wrap:wrap}.title{display:flex;justify-content:space-between;align-items:center;gap:10px}code{font-size:.9em}
+          </style></head><body><div class="wrap">
+          <div class="card"><h1>Monitor registratore Riflessa</h1><p>Mostra solo stato tecnico del dispositivo. Nessun dato cliente o contenuto fiscale viene inviato.</p></div>
+          <div id="login" class="card"><h2>Accesso amministratore</h2><div class="row"><input id="email" type="email" placeholder="Email"><input id="password" type="password" placeholder="Password"><button id="loginBtn">Accedi</button></div><p id="loginMsg"></p></div>
+          <div id="panel" class="hidden"><div class="title"><h2>Dispositivi</h2><button id="logoutBtn">Esci</button></div><div id="devices"></div></div>
+          </div><script type="module">
+          import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js';
+          import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js';
+          import { getFirestore, collection, onSnapshot } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
+          import { firebaseConfig } from './js/firebase-config.js';
+          const app=initializeApp(firebaseConfig); const auth=getAuth(app); const db=getFirestore(app);
+          const $=id=>document.getElementById(id); let unsub=null;
+          const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));
+          const ago=v=>{const d=v?.toDate?v.toDate():new Date(v||0);const sec=Math.max(0,Math.round((Date.now()-d.getTime())/1000));if(sec<60)return `${sec}s fa`;if(sec<3600)return `${Math.round(sec/60)} min fa`;if(sec<86400)return `${Math.round(sec/3600)} h fa`;return `${Math.round(sec/86400)} gg fa`};
+          function render(rows){$('devices').innerHTML=rows.length?rows.map(x=>{const d=x.data();const seen=d.lastSeenAt?.toDate?.()||new Date(d.lastSeenAtClient||0);const online=Date.now()-seen.getTime()<10*60*1000;const critical=Number(d.idempotencyUncertain||0)+Number(d.localRecoveryCount||0)+(d.activeFiscalIntent?1:0);return `<div class="card"><div class="title"><h3>${esc(d.deviceLabel||x.id)}</h3><span class="${online?'ok':'bad'}">${online?'ONLINE':'OFFLINE'}</span></div><div class="grid"><div class="metric"><small>Versione app</small><div><b>${esc(d.appVersion||'-')}</b></div></div><div class="metric"><small>Ultimo contatto</small><div>${esc(ago(d.lastSeenAt||d.lastSeenAtClient))}</div></div><div class="metric"><small>Registratore RT</small><div class="${d.rtReachable===true?'ok':d.rtReachable===false?'bad':'warn'}">${d.rtReachable===true?'Raggiungibile':d.rtReachable===false?'Non raggiungibile':'Non verificato'}</div></div><div class="metric"><small>Operazioni fiscali critiche</small><div class="${critical?'bad':'ok'}">${critical||0}</div></div><div class="metric"><small>Coda fiscale</small><div>${Number(d.fiscalQueueDepth||0)}</div></div><div class="metric"><small>Recovery locali</small><div>${Number(d.localRecoveryCount||0)}</div></div></div><small>ID dispositivo: <code>${esc(x.id)}</code></small></div>`}).join(''):'<div class="card">Nessun registratore ha ancora inviato telemetria.</div>'}
+          $('loginBtn').onclick=async()=>{try{$('loginMsg').textContent='';await signInWithEmailAndPassword(auth,$('email').value.trim(),$('password').value)}catch(e){$('loginMsg').textContent='Accesso non riuscito: '+(e?.message||e)}};
+          $('logoutBtn').onclick=()=>signOut(auth);
+          onAuthStateChanged(auth,user=>{if(unsub){unsub();unsub=null} $('login').classList.toggle('hidden',!!user);$('panel').classList.toggle('hidden',!user);if(user)unsub=onSnapshot(collection(db,'deviceStatus'),snap=>render(snap.docs),err=>{$('devices').innerHTML=`<div class="card bad">Accesso negato o errore: ${esc(err.message)}</div>`})});
+          </script></body></html>
+          EOF
+
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('firestore.rules'); s=p.read_text()
+          anchor="    match /fiscalAudit/{id} {\n      allow read: if isStaff();\n      allow create: if isStaff() && request.resource.data.operatorUid == request.auth.uid;\n      allow update, delete: if isAdmin();\n    }\n"
+          block=anchor+"\n    match /deviceStatus/{deviceId} {\n      allow read: if isAdmin();\n      allow create, update: if isStaff()\n        && request.resource.data.schemaVersion == 1\n        && request.resource.data.deviceId == deviceId\n        && request.resource.data.operatorUid == request.auth.uid;\n      allow delete: if isAdmin();\n    }\n"
+          if anchor not in s: raise SystemExit('rules anchor not found')
+          p.write_text(s.replace(anchor,block,1))
+          PY
+
+          cat > VERSIONE_3_5_8_TELEMETRIA.txt <<'EOF'
+          Riflessabeautyapp 3.5.8
+          - Telemetria tecnica heartbeat ogni 5 minuti.
+          - Nessun dato cliente o contenuto fiscale nella telemetria.
+          - Monitor remoto admin in monitor.html.
+          - Stato app/versione/RT/coda/recovery/idempotenza.
+          EOF
+
+          node --check electron/preload.js
+          npm test
+          npm run check
+          git diff --check
+
+      - name: Commit sorgente
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add "$APP_DIR"
+          git commit -m 'Aggiunge telemetria remota registratore 3.5.8'
+          git push origin HEAD:main
+
+      - name: Deploy Firestore Rules via Admin SDK
+        shell: bash
+        env:
+          GOOGLE_CREDENTIALS_JSON: ${{ env.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          set -euo pipefail
+          test -n "$PROJECT_ID"
+          test -n "$GOOGLE_CREDENTIALS_JSON"
+          npm install firebase-admin@13 --no-save --no-audit --no-fund
+          node <<'NODE'
+          const fs=require('fs'); const admin=require('firebase-admin');
+          const sa=JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON);
+          admin.initializeApp({credential:admin.credential.cert(sa),projectId:process.env.PROJECT_ID});
+          const source=fs.readFileSync(process.env.APP_DIR+'/firestore.rules','utf8');
+          admin.securityRules().releaseFirestoreRulesetFromSource(source).then(()=>console.log('Rules deviceStatus pubblicate'));
+          NODE
+
+      - name: Deploy Hosting monitor
+        shell: bash
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/firebase-sa.json
+        run: |
+          set -euo pipefail
+          printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > "$GOOGLE_APPLICATION_CREDENTIALS"
+          npm install -g firebase-tools@13
+          cd "$APP_DIR"
+          firebase deploy --only hosting:registratore --project "$PROJECT_ID" --non-interactive
