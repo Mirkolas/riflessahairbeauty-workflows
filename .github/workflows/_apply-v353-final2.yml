@@ -1,0 +1,88 @@
+name: Pubblica e verifica registratore 3.5.3
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/_apply-v353-final2.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  SOURCE_REPOSITORY: Mirkolas/riflessahairbeauty
+  SOURCE_PAT: ${{ secrets.PUBLIC_REPO_TOKEN }}
+  APP_DIR: riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
+
+jobs:
+  publish-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: workflows
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          ref: main
+          token: ${{ env.SOURCE_PAT }}
+          path: source
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Applica patch
+        run: python workflows/scripts/apply-v353-automation.py source
+
+      - name: Imposta versione
+        working-directory: source/${{ env.APP_DIR }}
+        run: npm version 3.5.3 --no-git-tag-version
+
+      - name: Installa dipendenze
+        working-directory: source/${{ env.APP_DIR }}
+        run: npm install --no-audit --no-fund
+
+      - name: Test prima della pubblicazione
+        working-directory: source/${{ env.APP_DIR }}
+        run: npm test
+
+      - name: Check prima della pubblicazione
+        working-directory: source/${{ env.APP_DIR }}
+        run: npm run check
+
+      - name: Pubblica via GitHub API
+        env:
+          SOURCE_PAT: ${{ env.SOURCE_PAT }}
+        run: python workflows/scripts/publish-v353.py source "${SOURCE_REPOSITORY}" main
+
+      - name: Checkout main definitivo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          ref: main
+          token: ${{ env.SOURCE_PAT }}
+          path: verify
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verifica versione definitiva
+        working-directory: verify/${{ env.APP_DIR }}
+        run: |
+          test "$(node -p "require('./package.json').version")" = "3.5.3"
+          grep -q 'scheduleFiscalTransmissionChecks' js/app.js
+          ! grep -q 'confirmFiscalCloseBtn' index.html
+          grep -q '768 \* 1024' electron/main.js
+
+      - name: Installa dipendenze definitive
+        working-directory: verify/${{ env.APP_DIR }}
+        run: npm ci --no-audit --no-fund
+
+      - name: Test finali sul main
+        working-directory: verify/${{ env.APP_DIR }}
+        run: npm test
+
+      - name: Check finale sul main
+        working-directory: verify/${{ env.APP_DIR }}
+        run: npm run check
