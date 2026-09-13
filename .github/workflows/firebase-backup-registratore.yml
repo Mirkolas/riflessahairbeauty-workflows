@@ -24,7 +24,7 @@ env:
 
 jobs:
   backup:
-    name: Backup registratore checkpoint/resume
+    name: Backup registratore checkpoint/resume persistente
     runs-on: ubuntu-latest
     timeout-minutes: 120
 
@@ -93,7 +93,7 @@ jobs:
           mkdir -p "${RUNNER_TEMP}/registratore-backup-tool"
           npm install --prefix "${RUNNER_TEMP}/registratore-backup-tool" firebase-admin@13 --no-audit --no-fund >/dev/null
 
-      - name: Crea backup con checkpoint, resume e massimo 4 tentativi
+      - name: Crea backup con checkpoint persistente e massimo 4 tentativi
         if: steps.schedule_gate.outputs.run == 'true'
         id: backup
         working-directory: backup-repo
@@ -111,26 +111,49 @@ jobs:
           APP_DIR="riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions"
           ORCHESTRATOR="${GITHUB_WORKSPACE}/workflow-src/scripts/backup-registratore-v3.cjs"
           VERIFIER="${GITHUB_WORKSPACE}/workflow-src/scripts/verifica-backup-registratore.cjs"
+          JOURNAL_CLEANER="${GITHUB_WORKSPACE}/workflow-src/scripts/pulisci-journal-backup.cjs"
           CHECKPOINT_DIR="${RUNNER_TEMP}/registratore-backup-checkpoint"
-          SOURCE_COMMIT="$(git rev-parse HEAD)"
-          RUN_TIMESTAMP="$(date -u +'%Y%m%d-%H%M%S')"
-          BACKUP_NAME="backup-${RUN_TIMESTAMP}"
-          FINAL_DIR="${PWD}/backup-registratore/${BACKUP_NAME}"
+          PERSISTENT_CHECKPOINT_DIR="${PWD}/.backup-checkpoints/registratore"
+          BACKUP_REPO_DIR="${PWD}"
+          RESUME_FILE="${PERSISTENT_CHECKPOINT_DIR}/resume.json"
 
           rm -rf "${CHECKPOINT_DIR}"
           mkdir -p "${CHECKPOINT_DIR}/source-app"
-          rsync -a --delete --exclude node_modules --exclude dist "${APP_DIR}/" "${CHECKPOINT_DIR}/source-app/"
 
-          PREVIOUS_BACKUP_DIR="$(find backup-registratore -mindepth 1 -maxdepth 1 -type d -name 'backup-*' | sort | tail -n 1)"
-          PREVIOUS_BACKUP_NAME=""
+          if [[ -f "${RESUME_FILE}" ]]; then
+            echo "Trovato checkpoint persistente da un workflow precedente."
+            BACKUP_NAME="$(node -p "const m=require('${RESUME_FILE}'); if(m.format!=='riflessa-persistent-checkpoint-v1'||m.projectId!==process.env.PROJECT_ID)process.exit(2); m.backupName")" || exit 1
+            SOURCE_COMMIT="$(node -p "require('${RESUME_FILE}').sourceCommit")"
+            PREVIOUS_BACKUP_NAME="$(node -p "require('${RESUME_FILE}').previousBackupName || ''")"
+            [[ "${BACKUP_NAME}" =~ ^backup-[0-9]{8}-[0-9]{6}$ ]] || { echo "::error::Backup name nel checkpoint non valido."; exit 1; }
+            [[ "${SOURCE_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::Source commit nel checkpoint non valido."; exit 1; }
+            git cat-file -e "${SOURCE_COMMIT}^{commit}" || { echo "::error::Commit sorgente del checkpoint non disponibile."; exit 1; }
+            RUN_TIMESTAMP="${BACKUP_NAME#backup-}"
+          else
+            SOURCE_COMMIT="$(git rev-parse HEAD)"
+            RUN_TIMESTAMP="$(date -u +'%Y%m%d-%H%M%S')"
+            BACKUP_NAME="backup-${RUN_TIMESTAMP}"
+            PREVIOUS_BACKUP_NAME="$(find backup-registratore -mindepth 1 -maxdepth 1 -type d -name 'backup-*' -printf '%f\n' 2>/dev/null | sort | tail -n 1)"
+          fi
+
           PREVIOUS_BACKUP_ABS=""
-          if [[ -n "${PREVIOUS_BACKUP_DIR}" ]]; then
-            PREVIOUS_BACKUP_NAME="$(basename "${PREVIOUS_BACKUP_DIR}")"
-            PREVIOUS_BACKUP_ABS="${PWD}/${PREVIOUS_BACKUP_DIR}"
+          if [[ -n "${PREVIOUS_BACKUP_NAME}" ]]; then
+            PREVIOUS_BACKUP_ABS="${PWD}/backup-registratore/${PREVIOUS_BACKUP_NAME}"
+            [[ -d "${PREVIOUS_BACKUP_ABS}" ]] || { echo "::error::Base precedente ${PREVIOUS_BACKUP_NAME} non disponibile."; exit 1; }
             echo "Base precedente: ${PREVIOUS_BACKUP_NAME}"
           else
-            echo "Nessuna base precedente: il primo backup v3 sara completo."
+            echo "Nessuna base precedente: il backup sara completo."
           fi
+
+          FINAL_DIR="${PWD}/backup-registratore/${BACKUP_NAME}"
+
+          SOURCE_TREE="${RUNNER_TEMP}/registratore-source-tree"
+          rm -rf "${SOURCE_TREE}"
+          mkdir -p "${SOURCE_TREE}"
+          git archive "${SOURCE_COMMIT}" -- "${APP_DIR}" | tar -x -C "${SOURCE_TREE}"
+          rsync -a --delete --exclude node_modules --exclude dist "${SOURCE_TREE}/${APP_DIR}/" "${CHECKPOINT_DIR}/source-app/"
+          echo "Commit applicazione congelato per il backup: ${SOURCE_COMMIT}"
+          echo "Backup in lavorazione: ${BACKUP_NAME}"
 
           for ATTEMPT in 1 2 3 4; do
             echo "===== Tentativo backup ${ATTEMPT}/4 ====="
@@ -146,6 +169,8 @@ jobs:
               SOURCE_COMMIT="${SOURCE_COMMIT}" \
               BACKUP_NAME="${BACKUP_NAME}" \
               ATTEMPT="${ATTEMPT}" \
+              BACKUP_REPO_DIR="${BACKUP_REPO_DIR}" \
+              PERSISTENT_CHECKPOINT_DIR="${PERSISTENT_CHECKPOINT_DIR}" \
               node "${ORCHESTRATOR}"; then
 
               if BACKUP_PATH="${FINAL_DIR}" node "${VERIFIER}"; then
@@ -159,21 +184,32 @@ jobs:
                   for ((I=0; I<REMOVE_COUNT; I++)); do rm -rf -- "${BACKUPS[$I]}"; done
                 fi
 
-                git add backup-registratore
-                git commit -m "Backup registratore ${RUN_TIMESTAMP} (${BACKUP_MODE}, checkpoint/resume, tentativo ${ATTEMPT})"
+                # La rimozione del checkpoint persistente e il backup definitivo viaggiano nello stesso commit.
+                rm -rf "${PERSISTENT_CHECKPOINT_DIR}"
+                git add -A -- backup-registratore .backup-checkpoints
+                git commit -m "Backup registratore ${RUN_TIMESTAMP} (${BACKUP_MODE}, checkpoint persistente, tentativo ${ATTEMPT})"
                 if git push origin HEAD:main; then
-                  # Il checkpoint viene eliminato solo dopo archivio cifrato riletto/verificato e push riuscito.
-                  rm -rf "${CHECKPOINT_DIR}"
                   SUCCESS=1
                   FINAL_BACKUP="${BACKUP_NAME}"
                   FINAL_MODE="${BACKUP_MODE}"
                   echo "Backup definitivo creato: backup-registratore/${BACKUP_NAME}"
+
+                  JOURNAL_OK=0
+                  for JATTEMPT in 1 2 3 4; do
+                    echo "Pulizia journal verificato, tentativo ${JATTEMPT}/4"
+                    if BACKUP_PATH="${FINAL_DIR}" node "${JOURNAL_CLEANER}"; then JOURNAL_OK=1; break; fi
+                    if (( JATTEMPT < 4 )); then sleep 5; fi
+                  done
+                  if (( JOURNAL_OK != 1 )); then echo "::warning::Backup riuscito ma pulizia _backupChanges non completata; nessuna entry non verificata e stata cancellata."; fi
+
+                  rm -rf "${CHECKPOINT_DIR}"
                   break
                 fi
               fi
             fi
 
-            echo "::warning::Tentativo ${ATTEMPT}/4 non riuscito. Il checkpoint resta disponibile per il resume."
+            echo "::warning::Tentativo ${ATTEMPT}/4 non riuscito. I checkpoint completati restano cifrati nel repository privato."
+            git fetch origin main >/dev/null 2>&1 || true
             git reset --hard origin/main >/dev/null 2>&1 || true
             rm -rf "${FINAL_DIR}"
             if (( ATTEMPT < 4 )); then sleep 5; fi
@@ -181,7 +217,7 @@ jobs:
 
           if (( SUCCESS != 1 )); then
             echo "::error::Backup domenicale non completato dopo 4 tentativi."
-            echo "Checkpoint mantenuto fino alla fine del job per diagnosi; nessun backup parziale viene pubblicato."
+            echo "Il checkpoint cifrato persistente resta nel repository e verra ripreso dal prossimo workflow."
             exit 1
           fi
 
@@ -193,7 +229,8 @@ jobs:
         shell: bash
         run: |
           echo "Backup registratore riuscito."
-          echo "Sequenza: Firestore -> checkpoint -> Auth -> checkpoint -> Hosting -> checkpoint -> Log -> archivio finale cifrato -> rilettura -> verifica."
+          echo "Sequenza: Firestore -> checkpoint cifrato persistente -> Auth -> checkpoint -> Hosting -> checkpoint -> Log -> checkpoint -> archivio finale cifrato -> rilettura -> verifica -> push -> pulizia journal verificato."
+          echo "Errori Firestore/rete durante l'incrementale causano retry: il full fallback e riservato alla base locale incompatibile/non disponibile."
           echo "Tentativi massimi: 4."
           echo "Modalita: ${{ steps.backup.outputs.backup_mode }}"
           echo "Percorso: backup-registratore/${{ steps.backup.outputs.backup_name }}"
