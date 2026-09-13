@@ -2,7 +2,10 @@ name: Firebase backup - registratore
 
 on:
   schedule:
-    - cron: "17 2 * * *"
+    # GitHub cron usa UTC. I due orari coprono ora legale/solare italiana;
+    # il primo step esegue davvero il backup solo quando Europe/Rome e domenica ore 00.
+    - cron: "0 22 * * 6"
+    - cron: "0 23 * * 6"
   workflow_dispatch:
 
 permissions:
@@ -26,7 +29,32 @@ jobs:
     timeout-minutes: 120
 
     steps:
+      - name: Verifica orario backup Italia
+        id: schedule_gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            echo "run=true" >> "${GITHUB_OUTPUT}"
+            echo "Avvio manuale autorizzato."
+            exit 0
+          fi
+
+          LOCAL_DAY="$(TZ=Europe/Rome date +%u)"
+          LOCAL_HOUR="$(TZ=Europe/Rome date +%H)"
+          LOCAL_NOW="$(TZ=Europe/Rome date +'%Y-%m-%d %H:%M:%S %Z')"
+          echo "Ora italiana: ${LOCAL_NOW}"
+
+          if [[ "${LOCAL_DAY}" == "7" && "${LOCAL_HOUR}" == "00" ]]; then
+            echo "run=true" >> "${GITHUB_OUTPUT}"
+            echo "E domenica a mezzanotte in Italia: eseguo il backup."
+          else
+            echo "run=false" >> "${GITHUB_OUTPUT}"
+            echo "Questo e il passaggio UTC non corrispondente alla mezzanotte italiana: nessun backup."
+          fi
+
       - name: Verifica configurazione protetta
+        if: steps.schedule_gate.outputs.run == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -36,12 +64,14 @@ jobs:
           [[ -n "${AUTH_HASH_CONFIG}" ]] || { echo "::error::Manca FIREBASE_AUTH_HASH_CONFIG."; exit 1; }
 
       - name: Checkout workflow e script
+        if: steps.schedule_gate.outputs.run == 'true'
         uses: actions/checkout@v4
         with:
           path: workflow-src
           persist-credentials: false
 
       - name: Checkout repo privata backup
+        if: steps.schedule_gate.outputs.run == 'true'
         uses: actions/checkout@v4
         with:
           repository: ${{ env.BACKUP_REPOSITORY }}
@@ -52,11 +82,13 @@ jobs:
           persist-credentials: true
 
       - name: Configura Node.js
+        if: steps.schedule_gate.outputs.run == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: "24"
 
       - name: Installa Firebase Admin SDK
+        if: steps.schedule_gate.outputs.run == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -64,6 +96,7 @@ jobs:
           npm install --prefix "${RUNNER_TEMP}/registratore-backup-tool" firebase-admin@13 --no-audit --no-fund >/dev/null
 
       - name: Crea backup completo con massimo 5 tentativi
+        if: steps.schedule_gate.outputs.run == 'true'
         id: backup
         working-directory: backup-repo
         shell: bash
@@ -147,6 +180,7 @@ jobs:
           echo "backup_name=${FINAL_BACKUP}" >> "${GITHUB_OUTPUT}"
 
       - name: Riepilogo
+        if: steps.schedule_gate.outputs.run == 'true'
         shell: bash
         run: |
           echo "Backup completo registratore riuscito."
