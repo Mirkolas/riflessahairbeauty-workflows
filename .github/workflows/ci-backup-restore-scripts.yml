@@ -41,10 +41,11 @@ jobs:
           %w[
             .github/workflows/firebase-backup-registratore.yml
             .github/workflows/firebase-ripristino-registratore.yml
+            .github/workflows/firebase-test-restore-registratore.yml
             .github/workflows/ci-backup-restore-scripts.yml
           ].each do |file|
             YAML.load_file(file, aliases: true)
             puts "OK #{file}"
           end
       - name: Controlla whitespace
-        run: git diff --check HEAD^ HEAD || true
+        run: git diff --check HEAD^ HEAD
