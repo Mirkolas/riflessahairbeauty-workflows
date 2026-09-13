@@ -215,8 +215,10 @@ function phaseValid(state, name, validator) {
 }
 async function markPhase(state, name, metadata) {
   state.phases[name] = { ...metadata, completedAt: new Date().toISOString(), attempt: ATTEMPT };
-  saveState(state);
+  state.lastAttempt = ATTEMPT;
+  state.updatedAt = new Date().toISOString();
   await persistCheckpoint(state, name);
+  writeJsonAtomic(STATE_FILE, state);
   console.log(`CHECKPOINT ${name}: completato.`);
 }
 
