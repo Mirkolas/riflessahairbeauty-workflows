@@ -19,7 +19,7 @@ env:
 jobs:
   test-candidato:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - name: Verifica token sorgente
         shell: bash
@@ -51,3 +51,8 @@ jobs:
       - name: Verifica progetto
         working-directory: source/${{ env.APP_DIR }}
         run: npm run check
+
+      - name: Compila regole Firestore con emulatore
+        working-directory: source/${{ env.APP_DIR }}
+        shell: bash
+        run: npx firebase emulators:exec --only firestore --project riflessa-15a20 "node -e \"console.log('Firestore rules OK')\""
