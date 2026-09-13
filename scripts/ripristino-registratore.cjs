@@ -8,6 +8,8 @@ const admin = require('firebase-admin');
 
 const backupPathInput = process.env.BACKUP_PATH;
 const requestedFormat = process.env.BACKUP_FORMAT || '';
+const TARGET_PROJECT_ID = process.env.PROJECT_ID;
+const BACKUP_PROJECT_ID = process.env.BACKUP_PROJECT_ID || TARGET_PROJECT_ID;
 const FIRESTORE_MODE = String(process.env.FIRESTORE_MODE || 'merge').toLowerCase();
 const VERIFY_RESTORE = String(process.env.VERIFY_RESTORE || '1') !== '0';
 const RESTORE_HOSTING_DIR = process.env.RESTORE_HOSTING_DIR || '';
@@ -67,7 +69,10 @@ function hashTree(root) {
 }
 
 const credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON);
-admin.initializeApp({ credential: admin.credential.cert(credentials), projectId: process.env.PROJECT_ID });
+if (!TARGET_PROJECT_ID) throw new Error('PROJECT_ID target non impostato');
+if (credentials.project_id && credentials.project_id !== TARGET_PROJECT_ID) throw new Error(`Service account ${credentials.project_id} non corrisponde al target ${TARGET_PROJECT_ID}`);
+if (String(process.env.REQUIRE_DIFFERENT_TARGET || '') === '1' && TARGET_PROJECT_ID === BACKUP_PROJECT_ID) throw new Error('Blocco sicurezza: il progetto test coincide con il progetto sorgente');
+admin.initializeApp({ credential: admin.credential.cert(credentials), projectId: TARGET_PROJECT_ID });
 const db = admin.firestore();
 const auth = admin.auth();
 
@@ -252,7 +257,7 @@ async function restoreAuth(root, mode) {
 
 async function prepareV3() {
   const manifest = readJson(path.join(backupPathInput, 'manifest.json'));
-  if (manifest.format !== 'riflessa-registratore-encrypted-v3' || manifest.projectId !== process.env.PROJECT_ID) throw new Error('Manifest backup v3 non valido');
+  if (manifest.format !== 'riflessa-registratore-encrypted-v3' || manifest.projectId !== BACKUP_PROJECT_ID) throw new Error('Manifest backup v3 non valido');
   const encrypted = path.join(backupPathInput, manifest.archive.file || 'backup.enc');
   if (sha256File(encrypted) !== manifest.archive.cipherSha256) throw new Error('Hash archivio cifrato non valido');
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'riflessa-restore-'));
@@ -296,7 +301,7 @@ async function main() {
     }
     if (format === 'v3') {
       const payload = readJson(path.join(root, 'manifest.json'));
-      if (payload.format !== 'riflessa-registratore-payload-v3' || payload.projectId !== process.env.PROJECT_ID) throw new Error('Payload v3 non valido');
+      if (payload.format !== 'riflessa-registratore-payload-v3' || payload.projectId !== BACKUP_PROJECT_ID) throw new Error('Payload v3 non valido');
       const core = readSnapshotDir(path.join(root, 'firestore'));
       const logs = readSnapshotDir(path.join(root, 'logs'));
       const target = new Map([...core.documents, ...logs.documents]);
