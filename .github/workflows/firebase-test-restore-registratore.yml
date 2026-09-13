@@ -70,13 +70,14 @@ jobs:
         with:
           node-version: "24"
 
-      - name: Installa Firebase Admin SDK
+      - name: Installa Firebase Admin SDK e CLI
         if: steps.gate.outputs.enabled == 'true'
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "${RUNNER_TEMP}/registratore-restore-test-tool"
+          mkdir -p "${RUNNER_TEMP}/registratore-restore-test-tool" "${RUNNER_TEMP}/firebase-cli"
           npm install --prefix "${RUNNER_TEMP}/registratore-restore-test-tool" firebase-admin@13 --no-audit --no-fund >/dev/null
+          npm install --prefix "${RUNNER_TEMP}/firebase-cli" firebase-tools --no-audit --no-fund >/dev/null
 
       - name: Seleziona ultimo backup v3
         if: steps.gate.outputs.enabled == 'true'
@@ -144,6 +145,32 @@ jobs:
           set -euo pipefail
           node "${GITHUB_WORKSPACE}/workflow-src/scripts/ripristino-registratore.cjs"
 
+      - name: Pubblica snapshot Hosting nel progetto test
+        if: steps.gate.outputs.enabled == 'true'
+        shell: bash
+        env:
+          GOOGLE_CREDENTIALS_JSON: ${{ env.TEST_GOOGLE_CREDENTIALS_JSON }}
+        run: |
+          set -euo pipefail
+          DEPLOY_DIR="${RUNNER_TEMP}/registratore-hosting-deploy"
+          CREDENTIAL_FILE="${RUNNER_TEMP}/firebase-test-service-account.json"
+          rm -rf "${DEPLOY_DIR}"
+          mkdir -p "${DEPLOY_DIR}/public"
+          rsync -a "${RUNNER_TEMP}/registratore-hosting-restored/hosting/" "${DEPLOY_DIR}/public/"
+          cat > "${DEPLOY_DIR}/firebase.json" <<'JSON'
+          {
+            "hosting": {
+              "public": "public",
+              "ignore": []
+            }
+          }
+          JSON
+          printf '%s' "${GOOGLE_CREDENTIALS_JSON}" > "${CREDENTIAL_FILE}"
+          chmod 600 "${CREDENTIAL_FILE}"
+          cd "${DEPLOY_DIR}"
+          GOOGLE_APPLICATION_CREDENTIALS="${CREDENTIAL_FILE}" "${RUNNER_TEMP}/firebase-cli/node_modules/.bin/firebase" deploy --only hosting --project "${TEST_PROJECT_ID}" --config firebase.json --non-interactive
+          rm -f "${CREDENTIAL_FILE}"
+
       - name: Verifica eliminazione sonde exact
         if: steps.gate.outputs.enabled == 'true'
         shell: bash
@@ -175,4 +202,4 @@ jobs:
         run: |
           echo "Backup testato: ${{ steps.backup.outputs.name }}"
           echo "Target: ${TEST_PROJECT_ID} (diverso dalla produzione)."
-          echo "Verificati: decifratura archivio, Firestore exact, log, Auth replace, eliminazione extra, rilettura dati e ricostruzione Hosting."
+          echo "Verificati: decifratura archivio, Firestore exact, log, Auth replace, eliminazione extra, rilettura dati, ricostruzione Hosting e deploy Hosting sul progetto test."
