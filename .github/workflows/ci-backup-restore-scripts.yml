@@ -1,0 +1,50 @@
+name: CI backup e restore registratore
+
+on:
+  push:
+    paths:
+      - 'scripts/backup-registratore-v3.cjs'
+      - 'scripts/ripristino-registratore.cjs'
+      - 'scripts/verifica-backup-registratore.cjs'
+      - 'scripts/pulisci-journal-backup.cjs'
+      - '.github/workflows/firebase-backup-registratore.yml'
+      - '.github/workflows/firebase-ripristino-registratore.yml'
+      - '.github/workflows/firebase-test-restore-registratore.yml'
+      - '.github/workflows/ci-backup-restore-scripts.yml'
+  pull_request:
+    paths:
+      - 'scripts/**'
+      - '.github/workflows/**'
+
+permissions:
+  contents: read
+
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Controlla sintassi Node
+        run: |
+          set -euo pipefail
+          node --check scripts/backup-registratore-v3.cjs
+          node --check scripts/ripristino-registratore.cjs
+          node --check scripts/verifica-backup-registratore.cjs
+          node --check scripts/pulisci-journal-backup.cjs
+      - name: Controlla YAML workflow
+        shell: ruby {0}
+        run: |
+          require 'yaml'
+          %w[
+            .github/workflows/firebase-backup-registratore.yml
+            .github/workflows/firebase-ripristino-registratore.yml
+            .github/workflows/ci-backup-restore-scripts.yml
+          ].each do |file|
+            YAML.load_file(file, aliases: true)
+            puts "OK #{file}"
+          end
+      - name: Controlla whitespace
+        run: git diff --check HEAD^ HEAD || true
