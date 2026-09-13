@@ -10,6 +10,7 @@ on:
       - '.github/workflows/firebase-backup-registratore.yml'
       - '.github/workflows/firebase-ripristino-registratore.yml'
       - '.github/workflows/firebase-test-restore-registratore.yml'
+      - '.github/workflows/firebase-test-restore-emulator-registratore.yml'
       - '.github/workflows/ci-backup-restore-scripts.yml'
   pull_request:
     paths:
@@ -44,6 +45,7 @@ jobs:
             .github/workflows/firebase-backup-registratore.yml
             .github/workflows/firebase-ripristino-registratore.yml
             .github/workflows/firebase-test-restore-registratore.yml
+            .github/workflows/firebase-test-restore-emulator-registratore.yml
             .github/workflows/ci-backup-restore-scripts.yml
           ].each do |file|
             YAML.load_file(file, aliases: true)
