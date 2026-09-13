@@ -1,0 +1,215 @@
+name: Applica chiusura fiscale automatica
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/_apply-auto-fiscal-close.yml"
+
+permissions:
+  contents: read
+
+env:
+  SOURCE_REPOSITORY: Mirkolas/riflessahairbeauty
+  SOURCE_PAT: ${{ secrets.PUBLIC_REPO_TOKEN }}
+  APP_DIR: riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo privata
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          ref: main
+          token: ${{ env.SOURCE_PAT }}
+          path: source
+          persist-credentials: true
+          fetch-depth: 0
+
+      - name: Applica modifica chiusura fiscale automatica
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          root = Path('source')
+          app_dir = root / 'riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions'
+          app = app_dir / 'js/app.js'
+          index = app_dir / 'index.html'
+          guide_old = root / 'Guida_Riflessa_App_Registratore_3.5.2.txt'
+          guide_new = root / 'Guida_Riflessa_App_Registratore_3.5.3.txt'
+
+          s = app.read_text(encoding='utf-8')
+          s = s.replace('$("confirmFiscalCloseBtn").onclick = confirmFiscalClose;\n', '')
+
+          s, n = re.subn(
+              r'\nasync function confirmFiscalClose\(\)\{.*?\n\}\nfunction renderFiscalClose\(\)\{',
+              '\nfunction renderFiscalClose(){',
+              s,
+              count=1,
+              flags=re.S,
+          )
+          if n != 1:
+              raise SystemExit(f'Funzione manuale non trovata/rimossa: {n}')
+
+          pattern = re.compile(
+              r'    const z=r\?\.status\?\.ej\?\.lastdoc\?\.zno\|\|"";\n'
+              r'    await addDoc\(collection\(db,"fiscalClosures"\),\{.*?\}\);\n'
+              r'    \$\("fiscalCloseArm"\)\.checked=false;',
+              re.S,
+          )
+          replacement = '''    const z=r?.status?.ej?.lastdoc?.zno||"";
+    const daySales=printedSales().filter(s=>session?s.cashSessionId===session.id:s.businessDate===today);
+    const dayReturns=state.returns.filter(x=>(session?x.cashSessionId===session.id:x.businessDate===today)&&x.status!=="cancelled");
+    const dayExpenses=state.expenses.filter(x=>session?x.cashSessionId===session.id:x.businessDate===today);
+    const dayMovements=state.cashMovements.filter(x=>session?x.cashSessionId===session.id:x.businessDate===today);
+    const salesTotalCents=daySales.reduce((a,x)=>a+Number(x.totalCents||0),0);
+    const returnsTotalCents=dayReturns.reduce((a,x)=>a+Number(x.totalCents||0),0);
+    const receiptRefs=daySales.map(x=>({
+      id:x.id,
+      fiscalZ:x.fiscalZ||"",
+      fiscalDocNo:x.fiscalDocNo||"",
+      totalCents:Number(x.totalCents||0),
+      paymentMethod:x.paymentMethod||"",
+      createdAtClient:x.createdAtClient||"",
+      operatorUid:x.operatorUid||"",
+      staffId:x.staffId||"",
+      staffName:x.staffName||""
+    }));
+    const returnRefs=dayReturns.map(x=>({id:x.id,saleId:x.saleId||"",type:x.type||"",totalCents:Number(x.totalCents||0),refundMethod:x.refundMethod||"",createdAtClient:x.createdAtClient||""}));
+    const expenseRefs=dayExpenses.map(x=>({id:x.id,amountCents:Number(x.amountCents||0),category:x.category||"",paymentMethod:x.paymentMethod||"",createdAtClient:x.createdAtClient||""}));
+    const movementRefs=dayMovements.map(x=>({id:x.id,type:x.type||"",amountCents:Number(x.amountCents||0),reason:x.reason||"",createdAtClient:x.createdAtClient||""}));
+    const cashSessionSnapshot=session?{
+      id:session.id,
+      openedAtClient:session.openedAtClient||"",
+      closedAtClient:session.closedAtClient||"",
+      openingFloatCents:Number(session.openingFloatCents||0),
+      cashSalesCents:Number(session.cashSalesCents||0),
+      cardSalesCents:Number(session.cardSalesCents||0),
+      cashReturnsCents:Number(session.cashReturnsCents||0),
+      cardReturnsCents:Number(session.cardReturnsCents||0),
+      otherSalesCents:Number(session.otherSalesCents||0),
+      cashExpensesCents:Number(session.cashExpensesCents||0),
+      cashDepositsCents:Number(session.cashDepositsCents||0),
+      cashWithdrawalsCents:Number(session.cashWithdrawalsCents||0),
+      expectedCashCents:Number(session.expectedCashCents||0),
+      actualCashCents:Number(session.actualCashCents||0),
+      differenceCents:Number(session.differenceCents||0),
+      closingNotes:session.closingNotes||"",
+      closedBy:session.closedBy||""
+    }:null;
+    const closureRef=await addDoc(collection(db,"fiscalClosures"),{
+      confirmedAt:serverTimestamp(),confirmedAtClient:new Date().toISOString(),businessDate:today,
+      operatorUid:auth.currentUser.uid,operatorEmail:auth.currentUser.email||"",
+      rtSerial:r?.status?.device?.serial||"8AIGE005584",method:"remote-x7",status:"success",
+      reference:z?`Z ${z}`:"Chiusura RT completata",zNumber:z||"",cashSessionId:session?.id||"",
+      receiptCount:daySales.length,receiptIds:daySales.map(x=>x.id),receiptRefs,
+      salesTotalCents,returnCount:dayReturns.length,returnIds:dayReturns.map(x=>x.id),returnRefs,
+      returnsTotalCents,netSalesCents:salesTotalCents-returnsTotalCents,
+      expenseCount:dayExpenses.length,expenseRefs,
+      movementCount:dayMovements.length,movementRefs,
+      cashSessionSnapshot,
+      fiscalResult:JSON.stringify(r).slice(0,15000),dataVersion:2,
+      note:"Chiusura fiscale automatica confermata dal DADO e registrata dal gestionale."
+    });
+    try{
+      for(let i=0;i<daySales.length;i+=400){
+        const batch=writeBatch(db);
+        daySales.slice(i,i+400).forEach(sale=>batch.update(doc(db,"sales",sale.id),{
+          fiscalClosureId:closureRef.id,
+          fiscalClosureReference:z?`Z ${z}`:"Chiusura RT completata",
+          fiscalClosedAtClient:new Date().toISOString()
+        }));
+        await batch.commit();
+      }
+    }catch(linkError){
+      console.warn("Chiusura registrata, ma collegamento di alcuni scontrini non riuscito:",linkError);
+    }
+    $("fiscalCloseArm").checked=false;'''
+          s, n = pattern.subn(replacement, s, count=1)
+          if n != 1:
+              raise SystemExit(f'Blocco successo chiusura non sostituito: {n}')
+
+          s = s.replace('version:"3.5.2"', 'version:"3.5.3"')
+          app.write_text(s, encoding='utf-8')
+
+          h = index.read_text(encoding='utf-8')
+          h, n = re.subn(r'\n\s*<div class="manual-fallback">.*?</div>', '', h, count=1, flags=re.S)
+          if n != 1:
+              raise SystemExit(f'Fallback manuale HTML non rimosso: {n}')
+          index.write_text(h, encoding='utf-8')
+
+          if guide_old.exists():
+              g = guide_old.read_text(encoding='utf-8')
+              g = g.replace('Versione 3.5.2', 'Versione 3.5.3', 1)
+              start = '======================================================================\n5.3 CHIUSURA ESEGUITA MANUALMENTE\n======================================================================'
+              next_head = '======================================================================\n5.4 STORICO QUADRATURE\n======================================================================'
+              if start in g and next_head in g:
+                  before, rest = g.split(start, 1)
+                  _, after = rest.split(next_head, 1)
+                  auto = '''======================================================================
+5.3 REGISTRAZIONE AUTOMATICA DELLA CHIUSURA
+======================================================================
+
+Non è prevista una registrazione manuale della chiusura fiscale nell'uso normale.
+
+Dopo la quadratura, l'operatore conferma la chiusura e preme "Chiudi giornata fiscale".
+L'app invia il comando al DADO RT30 una sola volta.
+
+SOLO quando il registratore restituisce un esito positivo, il gestionale registra
+automaticamente la chiusura della giornata.
+
+La registrazione comprende:
+- data della giornata;
+- data/ora della conferma;
+- operatore che ha eseguito la chiusura;
+- seriale del registratore;
+- numero/riferimento Z quando restituito dal DADO;
+- sessione e quadratura di cassa;
+- fondo iniziale, contanti attesi, effettivi e differenza;
+- totale vendite contanti e carta;
+- tutti gli scontrini della sessione, collegati alla chiusura;
+- totali vendita lordi e netti;
+- resi e annulli della sessione;
+- spese e movimenti di cassa collegati;
+- risposta tecnica del registratore utile per diagnosi e controllo.
+
+Gli scontrini completi continuano a rimanere nello storico Scontrini; la chiusura conserva
+i loro identificativi e riferimenti fiscali e li collega alla chiusura stessa, evitando
+di duplicare inutilmente l'intero contenuto di ogni documento.
+
+Se l'esito del DADO è incerto o negativo, la chiusura NON viene registrata come riuscita.
+L'app salva l'esito incerto e chiede di verificare fisicamente il registratore prima di
+ripetere qualsiasi comando.
+
+======================================================================
+5.4 STORICO QUADRATURE
+======================================================================'''
+                  g = before + auto + after
+              guide_new.write_text(g, encoding='utf-8')
+              guide_old.unlink()
+
+          test_file = app_dir / 'tests/automatic-fiscal-closure.test.js'
+          test_file.write_text('''const test=require("node:test");\nconst assert=require("node:assert/strict");\nconst fs=require("node:fs");\nconst path=require("node:path");\nconst root=path.join(__dirname,"..");\nconst html=fs.readFileSync(path.join(root,"index.html"),"utf8");\nconst app=fs.readFileSync(path.join(root,"js","app.js"),"utf8");\n\ntest("chiusura fiscale usa solo il flusso automatico",()=>{\n  assert.equal(html.includes("manual-fallback"),false);\n  assert.equal(html.includes("confirmFiscalCloseBtn"),false);\n  assert.equal(app.includes("manual-keypad"),false);\n  assert.equal(app.includes("confirmFiscalClose"),false);\n});\n\ntest("chiusura riuscita conserva riepilogo e collega gli scontrini",()=>{\n  for(const token of ["receiptRefs","cashSessionSnapshot","closureRef","fiscalClosureId","returnsTotalCents","expenseRefs","movementRefs"]) assert.equal(app.includes(token),true,token);\n});\n''', encoding='utf-8')
+          PY
+
+          cd "source/${APP_DIR}"
+          npm version 3.5.3 --no-git-tag-version
+          npm install --no-audit --no-fund
+          npm test
+          npm run check
+
+      - name: Commit e push privato
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Automatizza registrazione chiusura fiscale 3.5.3"
+          git push origin HEAD:main
