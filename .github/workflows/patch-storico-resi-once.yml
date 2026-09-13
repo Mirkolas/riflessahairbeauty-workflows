@@ -46,20 +46,19 @@ jobs:
           marker='// ---------- Returns ----------'
           if s.count(marker)!=1:
               raise SystemExit(f'marker Returns inatteso: {s.count(marker)}')
-          bridge=r'''
-function mergeHistoricalReturnsIntoState(relatedReturns=[]){
-  const known=new Set(state.returns.map(x=>x.id));
-  for(const item of relatedReturns){
-    if(!item?.id||known.has(item.id))continue;
-    state.returns.push(item);known.add(item.id);
-  }
-}
-window.riflessaReceiptActions=Object.freeze({
-  openSale(sale,relatedReturns=[]){mergeHistoricalReturnsIntoState(relatedReturns);return openSaleModal(sale);},
-  quickVoid(sale,relatedReturns=[]){mergeHistoricalReturnsIntoState(relatedReturns);return quickVoidSale(sale);}
-});
-
-'''
+          bridge=(
+              "function mergeHistoricalReturnsIntoState(relatedReturns=[]){\n"
+              "  const known=new Set(state.returns.map(x=>x.id));\n"
+              "  for(const item of relatedReturns){\n"
+              "    if(!item?.id||known.has(item.id))continue;\n"
+              "    state.returns.push(item);known.add(item.id);\n"
+              "  }\n"
+              "}\n"
+              "window.riflessaReceiptActions=Object.freeze({\n"
+              "  openSale(sale,relatedReturns=[]){mergeHistoricalReturnsIntoState(relatedReturns);return openSaleModal(sale);},\n"
+              "  quickVoid(sale,relatedReturns=[]){mergeHistoricalReturnsIntoState(relatedReturns);return quickVoidSale(sale);}\n"
+              "});\n\n"
+          )
           s=s.replace(marker,bridge+marker,1)
           p.write_text(s)
           PY
