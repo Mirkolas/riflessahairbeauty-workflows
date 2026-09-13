@@ -1,0 +1,42 @@
+name: Abilita trigger restore test una tantum
+
+on:
+  push:
+    paths:
+      - '.github/workflows/enable-live-restore-trigger-once.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Aggiunge trigger marker al workflow di test
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('.github/workflows/firebase-test-restore-registratore.yml')
+          s=p.read_text()
+          old='  workflow_dispatch:\n\npermissions:'
+          new="  workflow_dispatch:\n  push:\n    paths:\n      - '.restore-test-trigger'\n\npermissions:"
+          if s.count(old)!=1:
+              raise SystemExit(f'trigger restore: atteso 1 match, trovati {s.count(old)}')
+          p.write_text(s.replace(old,new,1))
+          PY
+          git diff --check
+      - name: Commit e rimuovi patch temporanea
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/workflows/firebase-test-restore-registratore.yml
+          git rm .github/workflows/enable-live-restore-trigger-once.yml
+          git commit -m 'Abilita trigger marker temporaneo per restore test'
+          git push origin HEAD:main
