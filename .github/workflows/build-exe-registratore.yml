@@ -59,8 +59,8 @@ jobs:
           VERSION="$(node -p "require('./package.json').version")"
           SOURCE_SHA="$(git -C ../.. rev-parse HEAD)"
           TAG="registratore-v${VERSION}"
-          INSTALLER="RiflessaRegistratore-Setup-${VERSION}-x64.exe"
-          PORTABLE="RiflessaRegistratore-Portable-${VERSION}-x64.exe"
+          INSTALLER="riflessa-app-versione(${VERSION})-setup.exe"
+          PORTABLE="riflessa-app-versione(${VERSION}).exe"
 
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "source_sha=${SOURCE_SHA}" >> "$GITHUB_OUTPUT"
@@ -129,16 +129,16 @@ jobs:
 
           npm run dist
           if ($LASTEXITCODE -ne 0) { throw "Build installer fallita" }
-          $setup = Join-Path "dist" $env:INSTALLER_NAME
-          if (-not (Test-Path $setup -PathType Leaf)) { throw "Installer atteso non trovato: $setup" }
-          Copy-Item $setup (Join-Path "release-out" $env:INSTALLER_NAME) -Force
+          $generated = @(Get-ChildItem -Path "dist" -Filter "RiflessaRegistratore-Setup-*.exe" -File)
+          if ($generated.Count -ne 1) { throw "Installer generato non trovato o ambiguo: $($generated.Count)" }
+          Copy-Item $generated[0].FullName (Join-Path "release-out" $env:INSTALLER_NAME) -Force
 
           Remove-Item -Path "dist" -Recurse -Force
           npm run portable
           if ($LASTEXITCODE -ne 0) { throw "Build portable fallita" }
-          $portableGenerated = Join-Path "dist" $env:INSTALLER_NAME
-          if (-not (Test-Path $portableGenerated -PathType Leaf)) { throw "Portable generata non trovata: $portableGenerated" }
-          Move-Item $portableGenerated (Join-Path "release-out" $env:PORTABLE_NAME) -Force
+          $generated = @(Get-ChildItem -Path "dist" -Filter "RiflessaRegistratore-Setup-*.exe" -File)
+          if ($generated.Count -ne 1) { throw "Portable generata non trovata o ambigua: $($generated.Count)" }
+          Move-Item $generated[0].FullName (Join-Path "release-out" $env:PORTABLE_NAME) -Force
 
       - name: Verifica file Windows generati
         shell: pwsh
@@ -163,7 +163,7 @@ jobs:
           $setup = Join-Path "release-out" $env:INSTALLER_NAME
           $portable = Join-Path "release-out" $env:PORTABLE_NAME
           $title = "Riflessa Registratore v$env:VERSION"
-          $notes = "Build Windows x64 del registratore: installer NSIS e versione Portable. Commit sorgente: $env:SOURCE_SHA"
+          $notes = "Build Windows x64 del registratore. Usa normalmente la versione Portable: $env:PORTABLE_NAME. Installer NSIS disponibile come file secondario. Commit sorgente: $env:SOURCE_SHA"
 
           gh release view $tag --repo $env:SOURCE_REPOSITORY *> $null
           if ($LASTEXITCODE -eq 0) {
@@ -173,4 +173,4 @@ jobs:
           }
 
           if ($LASTEXITCODE -ne 0) { throw "Pubblicazione release fallita" }
-          Write-Host "Release privata pronta: $tag"
+          Write-Host "Release privata pronta: $tag / $env:PORTABLE_NAME"
