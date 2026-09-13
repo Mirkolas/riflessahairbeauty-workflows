@@ -1,0 +1,82 @@
+name: Finalizza telemetria monitor registratore una tantum
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/finalize-telemetry-monitor-once.yml'
+
+permissions:
+  contents: read
+
+env:
+  APP_DIR: riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
+  SOURCE_PAT: ${{ secrets.PUBLIC_REPO_TOKEN }}
+  PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID }}
+  FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: Mirkolas/riflessahairbeauty
+          ref: main
+          token: ${{ env.SOURCE_PAT }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Patch versione preload e rules
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$APP_DIR"
+          npm ci --no-audit --no-fund
+          npm version 3.5.8 --no-git-tag-version
+          sed -i 's/3\.5\.7/3.5.8/g' scripts/check-project.js tests/auto-update.test.js
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('electron/preload.js'); s=p.read_text(); a="  appendModule('riflessa-reliability-dashboard', './js/reliability-dashboard.js');\n"
+          if "riflessa-device-telemetry" not in s: s=s.replace(a,a+"  appendModule('riflessa-device-telemetry', './js/device-telemetry.js');\n",1)
+          p.write_text(s)
+          p=Path('firestore.rules'); s=p.read_text(); a="    match /_backupChanges/{id} {"
+          block="    match /deviceStatus/{deviceId} {\n      allow read: if isAdmin();\n      allow create, update: if isStaff()\n        && request.resource.data.schemaVersion == 1\n        && request.resource.data.deviceId == deviceId\n        && request.resource.data.operatorUid == request.auth.uid;\n      allow delete: if isAdmin();\n    }\n\n"
+          if 'match /deviceStatus/' not in s: s=s.replace(a,block+a,1)
+          p.write_text(s)
+          PY
+          node --check electron/preload.js
+          npm test
+          npm run check
+          git diff --check
+      - name: Commit sorgente
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add "$APP_DIR"
+          git commit -m 'Finalizza telemetria remota registratore 3.5.8'
+          git push origin HEAD:main
+      - name: Deploy rules
+        shell: bash
+        env:
+          GOOGLE_CREDENTIALS_JSON: ${{ env.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          set -euo pipefail
+          npm install firebase-admin@13 --no-save --no-audit --no-fund
+          node <<'NODE'
+          const fs=require('fs'),admin=require('firebase-admin'),sa=JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON);admin.initializeApp({credential:admin.credential.cert(sa),projectId:process.env.PROJECT_ID});const src=fs.readFileSync(process.env.APP_DIR+'/firestore.rules','utf8');admin.securityRules().releaseFirestoreRulesetFromSource(src).then(()=>console.log('Rules pubblicate'));
+          NODE
+      - name: Deploy monitor hosting
+        shell: bash
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/firebase-sa.json
+        run: |
+          set -euo pipefail
+          printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > "$GOOGLE_APPLICATION_CREDENTIALS"
+          npm install -g firebase-tools@13
+          cd "$APP_DIR"
+          firebase deploy --only hosting:registratore --project "$PROJECT_ID" --non-interactive
