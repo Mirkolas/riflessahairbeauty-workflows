@@ -79,22 +79,34 @@ jobs:
         run: |
           set -euo pipefail
 
+          make_put_body() {
+            local local_file="$1"
+            local sha="$2"
+            local rel="$3"
+            python - "$local_file" "$sha" "$rel" <<'PY'
+          import base64, json, sys
+          local_file, sha, rel = sys.argv[1], sys.argv[2], sys.argv[3]
+          with open(local_file, 'rb') as fh:
+              encoded = base64.b64encode(fh.read()).decode('ascii')
+          body = {
+              'message': f'Automatizza registratore 3.5.3: {rel}',
+              'content': encoded,
+              'branch': 'main'
+          }
+          if sha:
+              body['sha'] = sha
+          with open('/tmp/github-body.json', 'w', encoding='utf-8') as fh:
+              json.dump(body, fh)
+          PY
+          }
+
           upsert_file() {
             local rel="$1"
             local local_file="source/$rel"
             local sha
-            local content
             sha="$(gh api "repos/${SOURCE_REPOSITORY}/contents/${rel}?ref=main" --jq '.sha' 2>/dev/null || true)"
-            content="$(base64 -w 0 "$local_file")"
-            if [[ -n "$sha" ]]; then
-              gh api --method PUT "repos/${SOURCE_REPOSITORY}/contents/${rel}" \
-                -f message="Automatizza registratore 3.5.3: ${rel}" \
-                -f content="$content" -f sha="$sha" -f branch="main" >/dev/null
-            else
-              gh api --method PUT "repos/${SOURCE_REPOSITORY}/contents/${rel}" \
-                -f message="Automatizza registratore 3.5.3: ${rel}" \
-                -f content="$content" -f branch="main" >/dev/null
-            fi
+            make_put_body "$local_file" "$sha" "$rel"
+            gh api --method PUT "repos/${SOURCE_REPOSITORY}/contents/${rel}" --input /tmp/github-body.json >/dev/null
             echo "Pubblicato: $rel"
           }
 
@@ -103,8 +115,12 @@ jobs:
             local sha
             sha="$(gh api "repos/${SOURCE_REPOSITORY}/contents/${rel}?ref=main" --jq '.sha' 2>/dev/null || true)"
             if [[ -n "$sha" ]]; then
-              gh api --method DELETE "repos/${SOURCE_REPOSITORY}/contents/${rel}" \
-                -f message="Aggiorna guida registratore 3.5.3" -f sha="$sha" -f branch="main" >/dev/null
+              python - "$sha" <<'PY'
+          import json, sys
+          with open('/tmp/github-delete.json', 'w', encoding='utf-8') as fh:
+              json.dump({'message':'Aggiorna guida registratore 3.5.3','sha':sys.argv[1],'branch':'main'}, fh)
+          PY
+              gh api --method DELETE "repos/${SOURCE_REPOSITORY}/contents/${rel}" --input /tmp/github-delete.json >/dev/null
               echo "Eliminato: $rel"
             fi
           }
