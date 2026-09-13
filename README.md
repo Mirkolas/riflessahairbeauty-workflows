@@ -5,7 +5,7 @@ Workflow separati dalla repository applicativa privata `Mirkolas/riflessahairbea
 ## Hosting Firebase
 
 - **Registratore**: target Firebase `registratore` -> site ID `riflessa-15a20` -> `riflessa-15a20.web.app`.
-- **Futura web app**: target Firebase `hairbeauty` -> site ID `riflessa-hair-beauty` -> `riflessa-hair-beauty.web.app`.
+- **Web app futura**: verra collegata a un progetto Firebase separato; il vecchio site ID `riflessa-hair-beauty` non viene piu usato.
 
 ## Firebase backup - registratore
 
@@ -50,9 +50,35 @@ L'interfaccia registratore e responsive anche sulla versione Hosting: desktop, P
 
 La sincronizzazione cloud dei log e attiva. Dopo il login nell'app Electron, se la postazione e online, `js/log-sync.js` legge i file locali esposti dal preload Electron e li salva a blocchi nella collection `registratoreLogFiles` e nelle relative subcollection `chunks`.
 
-La sincronizzazione parte poco dopo l'autenticazione e viene ripetuta periodicamente; vengono risincronizzati soltanto i file modificati. Le Firestore Rules consentono la scrittura all'utente autenticato soltanto quando `operatorUid` coincide con il suo UID.
+Il client controlla i log ogni 5 minuti; le append piccole possono essere accumulate fino a 15 minuti. I chunk sono allineati al limite del bridge Electron (240 KiB), quindi un file in crescita non viene riscritto interamente ad ogni controllo. Le Firestore Rules consentono la scrittura all'utente autenticato soltanto quando `operatorUid` coincide con il suo UID.
 
-Il primo backup completo v2 eseguito prima dell'attivazione definitiva delle Rules conteneva ancora `0` documenti log. Dopo che l'app Electron viene aperta e autenticata almeno una volta con connessione disponibile, i log locali vengono caricati su Firestore e rientrano automaticamente nei backup successivi.
+## Build automatica EXE Windows
+
+Il workflow `build-exe-registratore.yml` gira nella repository pubblica per non usare runner della repository privata, ma legge il sorgente esclusivamente da `Mirkolas/riflessahairbeauty` tramite `PUBLIC_REPO_TOKEN`.
+
+Ogni 5 minuti controlla il campo `version` del `package.json` del registratore. Se nella repository privata non esiste ancora la Release `registratore-vVERSION` con l'installer atteso, avvia un runner Windows x64 e:
+
+1. esegue `npm install`;
+2. esegue tutti i test;
+3. esegue `npm run check`;
+4. crea l'installer NSIS con `electron-builder`;
+5. pubblica il file **solo** nella Release della repository privata.
+
+Il file segue il formato:
+
+`RiflessaRegistratore-Setup-VERSION-x64.exe`
+
+Per creare una nuova versione basta modificare nel `package.json`:
+
+```json
+"version": "3.5.3"
+```
+
+e fare push su `main`. Non serve rinominare la cartella dell'app. Il workflow e anche avviabile manualmente da GitHub Actions.
+
+La build `3.5.2` e stata verificata realmente su Windows: 38/38 test superati, `npm run check` superato e installer NSIS generato con successo. La Release privata `registratore-v3.5.2` contiene `RiflessaRegistratore-Setup-3.5.2-x64.exe`.
+
+**Firma Windows:** l'installer attuale e tecnicamente valido ma non e ancora firmato con un certificato Authenticode commerciale; Windows SmartScreen puo quindi mostrare "Autore sconosciuto". La firma puo essere aggiunta successivamente tramite Secret GitHub senza inserire il certificato nel repository.
 
 ## Configurazione GitHub Actions
 
@@ -61,7 +87,7 @@ La repository pubblica `Mirkolas/riflessahairbeauty-workflows` usa questi nomi e
 ### Secrets
 
 - `FIREBASE_SERVICE_ACCOUNT`: JSON del service account Firebase/GCP.
-- `PUBLIC_REPO_TOKEN`: fine-grained PAT con `Contents: Read and write` sulla repository privata `Mirkolas/riflessahairbeauty`.
+- `PUBLIC_REPO_TOKEN`: fine-grained PAT con `Contents: Read and write` sulla repository privata `Mirkolas/riflessahairbeauty`; viene usato anche per pubblicare le Release EXE private.
 - `FIREBASE_AUTH_HASH_CONFIG`: parametri hash Firebase Authentication; sono accettati sia JSON sia il formato nativo `hash_config { ... }` mostrato dalla console Firebase.
 
 ### Variables
@@ -78,13 +104,13 @@ Sono stati verificati con GitHub Actions reale:
 - accesso read/write alla repository privata con `PUBLIC_REPO_TOKEN`;
 - test applicativi e `npm run check`;
 - responsive CSS;
-- codice di sincronizzazione log e relativo caricamento nell'app;
+- sincronizzazione log incrementale;
 - lettura ricorsiva Firestore;
 - lettura Firebase Authentication con password hash;
 - riconoscimento configurazione SCRYPT (`rounds=8`, `mem_cost=14`);
 - backup completo reale con commit e push nella repository privata;
 - decrittazione Authentication e dry-run non distruttivo del ripristino;
 - pubblicazione reale delle Firestore Rules con ruolo IAM `Firebase Rules Admin`;
-- deploy reale combinato `firestore:rules,hosting:registratore` completato con successo.
-
-Il backup reale del 12 settembre 2026 ha prodotto il formato `riflessa-registratore-backup-v2`, con 6 documenti Firestore e 1 account Authentication con hash password. In quel momento la sincronizzazione log non era ancora attiva nel client; la versione successivamente distribuita include il caricamento automatico di `js/log-sync.js`.
+- deploy reale combinato `firestore:rules,hosting:registratore` completato con successo;
+- build Windows x64 reale dell'installer Electron/NSIS;
+- pubblicazione reale dell'EXE nella Release privata della repository applicativa.
