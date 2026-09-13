@@ -15,7 +15,7 @@ env:
   APP_DIR: riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
 
 jobs:
-  patch-test-push:
+  patch-test-export:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -58,14 +58,17 @@ jobs:
         working-directory: source/${{ env.APP_DIR }}
         run: npm run check
 
-      - name: Commit e push su main privato
-        working-directory: source
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "Automatizza flussi registratore 3.5.3"
-          git remote set-url origin "https://x-access-token:${SOURCE_PAT}@github.com/${SOURCE_REPOSITORY}.git"
-          git push origin HEAD:main
+      - name: Esporta file testati
+        uses: actions/upload-artifact@v4
+        with:
+          name: registratore-3.5.3-patched
+          if-no-files-found: error
+          retention-days: 1
+          path: |
+            source/${{ env.APP_DIR }}/js/app.js
+            source/${{ env.APP_DIR }}/index.html
+            source/${{ env.APP_DIR }}/electron/main.js
+            source/${{ env.APP_DIR }}/package.json
+            source/${{ env.APP_DIR }}/package-lock.json
+            source/${{ env.APP_DIR }}/tests/automatic-fiscal-closure.test.js
+            source/Guida_Riflessa_App_Registratore_3.5.3.txt
