@@ -9,7 +9,7 @@ Workflow separati dalla repository applicativa privata `Mirkolas/riflessahairbea
 
 ## Firebase backup - registratore
 
-Esecuzione giornaliera alle `02:17 UTC` e avvio manuale. Ogni esecuzione prova fino a 5 volte e viene considerata riuscita soltanto dopo il push nella repository privata.
+Esecuzione automatica **ogni domenica a mezzanotte, ora italiana (`Europe/Rome`)**, con gestione automatica di ora legale/solare, e avvio manuale disponibile. Ogni esecuzione prova fino a 5 volte e viene considerata riuscita soltanto dopo il push nella repository privata.
 
 Il backup viene salvato in `Mirkolas/riflessahairbeauty/backup-registratore/backup-YYYYMMDD-HHMMSS/` e contiene:
 
