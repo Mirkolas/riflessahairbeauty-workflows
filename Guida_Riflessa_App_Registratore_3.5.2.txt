@@ -1,0 +1,748 @@
+RIFLESSA APP REGISTRATORE
+GUIDA OPERATIVA ALLE SEZIONI
+Versione 3.5.2
+
+Questa guida spiega a cosa serve ogni sezione principale dell'app Riflessa Registratore
+e come utilizzarla durante il lavoro quotidiano.
+
+======================================================================
+1. ACCESSO E STATO DELLA POSTAZIONE
+======================================================================
+
+All'avvio dell'app viene mostrata la schermata di accesso.
+
+Campi:
+- Email
+- Password
+
+Il login identifica l'utente che sta usando la postazione e permette all'app di applicare
+i relativi permessi.
+
+Nella schermata principale sono sempre visibili due stati importanti:
+
+CASSA
+Indica se la sessione di cassa gestionale è aperta.
+
+REGISTRATORE
+Indica lo stato del collegamento con il registratore telematico DADO RT30.
+
+Nella barra superiore sono disponibili anche due collegamenti rapidi:
+
+NUOVA VENDITA
+Riporta direttamente alla schermata Cassa.
+
+FINE GIORNATA
+Apre la sezione Chiusura.
+
+ESCI
+Chiude la sessione dell'utente corrente.
+
+======================================================================
+2. CASSA
+======================================================================
+
+La sezione Cassa serve per creare una nuova vendita e inviarla al registratore telematico.
+
+-------------------------
+RICERCA PRODOTTI/SERVIZI
+-------------------------
+
+È possibile trovare una voce tramite:
+- nome del prodotto o servizio;
+- categorie;
+- codice SKU;
+- codice a barre.
+
+La ricerca rapida può essere richiamata anche con Ctrl+K.
+
+Cliccando un prodotto o servizio, questo viene aggiunto al conto corrente.
+
+-------------------------
+CONTO CORRENTE
+-------------------------
+
+La parte destra contiene la vendita in preparazione.
+
+È possibile selezionare:
+
+CLIENTE
+Se non viene scelto un cliente specifico, viene usato "Cliente generico".
+
+OPERATORE
+Permette di attribuire la vendita o il servizio a un operatore.
+
+SCONTO %
+Applica uno sconto percentuale alla vendita.
+
+NOTA CONTO
+Campo facoltativo per annotazioni interne sulla vendita.
+
+L'app mostra:
+- Sconto
+- Subtotale
+- Totale finale
+
+-------------------------
+MODALITÀ DI PAGAMENTO
+-------------------------
+
+CONTANTI
+Registra il pagamento in contanti.
+
+CARTA / BANCOMAT
+Registra il pagamento elettronico.
+
+MISTO
+Permette di dividere il totale tra contanti e carta.
+
+Nel pagamento misto la somma:
+Contanti + Carta
+deve essere uguale al totale del conto.
+
+-------------------------
+ALTRE OPERAZIONI
+-------------------------
+
+RISTAMPA ULTIMO
+Ristampa l'ultimo documento fiscale emesso.
+
+STORNA ULTIMO
+Avvia l'annullamento fiscale dell'ultimo documento emesso.
+
+APRI CASSETTO
+Invia il comando di apertura del cassetto collegato al registratore.
+
+STATO REGISTRATORE
+Richiede lo stato corrente del registratore telematico.
+
+ANNULLA OPERAZIONE
+Serve a interrompere/annullare un documento fiscale rimasto aperto o un'operazione fiscale
+non completata correttamente.
+
+SVUOTA CONTO
+Elimina dal conto corrente gli articoli selezionati prima dell'emissione.
+
+In fondo viene mostrato lo stato del collegamento con il registratore.
+
+======================================================================
+3. SCONTRINI
+======================================================================
+
+La sezione Scontrini contiene lo storico dei documenti fiscali registrati dall'app.
+
+In alto vengono mostrati:
+
+INCASSO OGGI
+Somma delle vendite registrate nella giornata.
+
+SCONTRINI OGGI
+Numero dei documenti registrati oggi.
+
+MEDIA SCONTRINO
+Valore medio degli scontrini del periodo visualizzato.
+
+-------------------------
+FILTRI STORICO
+-------------------------
+
+È possibile filtrare per:
+- Data
+- Testo libero
+- Numero documento
+- Numero Z
+- Servizio
+- Operatore
+- Pagamento
+- Stato
+
+Pagamento:
+- Tutti
+- Contanti
+- Carta
+- Misto
+
+Stato:
+- Tutti
+- Attivi
+- Reso
+- Stornati
+
+Pulsanti:
+
+OGGI
+Mostra i documenti della giornata.
+
+TUTTI
+Rimuove il filtro giornaliero e mostra lo storico disponibile.
+
+ESPORTA
+Esporta lo storico.
+
+PULISCI
+Azzera i filtri applicati.
+
+MOSTRA ALTRI SCONTRINI
+Carica ulteriori risultati quando disponibili.
+
+-------------------------
+DOCUMENTO NON PRESENTE NELLO STORICO
+-------------------------
+
+Questa funzione serve quando un documento è presente nel registratore telematico ma non
+compare nello storico dell'app.
+
+Si possono inserire:
+- Numero Z
+- Numero documento
+- Data documento
+
+Operazioni disponibili:
+- Leggi totali
+- Ristampa
+
+ULTIMO DOCUMENTO
+Richiede rapidamente al registratore l'ultimo documento disponibile.
+
+======================================================================
+4. RESI E ANNULLI
+======================================================================
+
+Questa sezione mostra lo storico dei resi e degli annulli già registrati.
+
+Per creare un nuovo reso o annullo, il flusso corretto è:
+
+1. Aprire Scontrini.
+2. Cercare il documento originale.
+3. Aprire il documento.
+4. Eseguire l'operazione di reso o annullo prevista.
+
+Questo permette di mantenere il collegamento tra il documento originale e l'operazione
+successiva.
+
+======================================================================
+5. CHIUSURA GIORNALIERA
+======================================================================
+
+La sezione Chiusura serve per terminare correttamente la giornata.
+
+Il flusso è diviso in:
+
+1. Quadratura cassa.
+2. Chiusura fiscale.
+3. Controllo esito.
+
+======================================================================
+5.1 QUADRATURA CASSA
+======================================================================
+
+La sessione di cassa viene aperta automaticamente nella normale operatività.
+
+La scheda mostra, per esempio:
+
+CASSA APERTA
+Data e ora di apertura della sessione.
+
+FONDO
+Importo iniziale presente nella cassa all'apertura.
+
+VENDITE CONTANTI
+Totale delle vendite della sessione pagate in contanti.
+
+VENDITE CARTA
+Totale delle vendite della sessione pagate con carta/bancomat.
+
+CONTANTI ATTESI
+Importo che il gestionale si aspetta di trovare nel cassetto in base ai dati registrati,
+tenendo conto della situazione della cassa e dei movimenti gestionali pertinenti.
+
+CONTANTI EFFETTIVI
+Importo realmente contato nel cassetto a fine giornata.
+Questo dato va inserito manualmente dopo aver contato fisicamente il denaro.
+
+NOTE
+Campo facoltativo per annotare:
+- differenze;
+- problemi;
+- motivi di scostamento;
+- informazioni utili sulla giornata.
+
+REGISTRA QUADRATURA
+Salva la quadratura della sessione di cassa.
+
+IMPORTANTE:
+La quadratura gestionale e la chiusura fiscale NON sono la stessa cosa.
+
+La quadratura serve a controllare il denaro e i dati interni della cassa.
+La chiusura fiscale viene invece eseguita sul registratore telematico.
+
+======================================================================
+5.2 CHIUSURA FISCALE
+======================================================================
+
+Il flusso corretto è:
+
+1. Completare la quadratura della cassa.
+2. Spuntare:
+   "Confermo di voler eseguire la chiusura fiscale della giornata."
+3. Premere:
+   "Chiudi giornata fiscale".
+4. Attendere la stampa del documento di chiusura.
+5. Controllare l'esito.
+
+CHIUDI GIORNATA FISCALE
+Invia al registratore telematico il comando di chiusura fiscale giornaliera.
+
+È un'operazione importante e deve essere eseguita solo quando si vuole realmente chiudere
+la giornata fiscale.
+
+STAMPA TOTALI
+Richiede al registratore una stampa di controllo dei totali.
+
+Serve per consultare/verificare i dati.
+Non sostituisce la procedura di chiusura fiscale quando questa deve essere eseguita.
+
+CONTROLLA INVIO
+Serve a interrogare/verificare lo stato dell'invio fiscale gestito dal registratore.
+
+PRONTA PER LA CHIUSURA
+Indica che la schermata è in attesa dell'operazione.
+
+NESSUNA CHIUSURA FISCALE REGISTRATA NELL'APP
+Significa che il gestionale non ha ancora memorizzato una chiusura fiscale per la giornata.
+
+Non significa necessariamente che il registratore non sia stato chiuso manualmente
+direttamente dalla macchina.
+
+======================================================================
+5.3 CHIUSURA ESEGUITA MANUALMENTE
+======================================================================
+
+Se la chiusura fiscale è già stata eseguita direttamente dal registratore, è possibile
+registrarla anche nel gestionale.
+
+Procedura:
+
+1. Verificare che la chiusura sul registratore sia realmente terminata correttamente.
+2. Spuntare:
+   "Confermo che la chiusura è stata completata correttamente."
+3. Inserire, se disponibile, il numero/riferimento Z.
+4. Premere:
+   "Registra chiusura eseguita manualmente".
+
+Questa funzione NON esegue una seconda chiusura fiscale.
+Serve soltanto a comunicare al gestionale che la chiusura è già stata fatta esternamente.
+
+======================================================================
+5.4 STORICO QUADRATURE
+======================================================================
+
+La tabella Storico quadrature conserva il riepilogo delle chiusure registrate nell'app.
+
+Serve per verificare:
+- giornate già quadrate;
+- valori registrati;
+- eventuali differenze;
+- note;
+- riferimenti delle chiusure precedenti.
+
+======================================================================
+6. MAGAZZINO
+======================================================================
+
+La sezione Magazzino serve a controllare la giacenza dei prodotti configurati con il
+tracciamento stock.
+
+Indicatori:
+
+PRODOTTI TRACCIATI
+Numero dei prodotti per i quali è attiva la gestione magazzino.
+
+SOTTO SCORTA
+Numero dei prodotti la cui quantità ha raggiunto o superato verso il basso la soglia minima.
+
+VALORE MAGAZZINO
+Valore gestionale complessivo delle giacenze tracciate.
+
+La tabella permette di controllare:
+- giacenze;
+- carichi;
+- scarichi;
+- soglie minime;
+- prodotti da riordinare.
+
+ESPORTA CSV
+Esporta i dati di magazzino in formato CSV per controlli o elaborazioni esterne.
+
+======================================================================
+7. MOVIMENTI
+======================================================================
+
+La sezione Movimenti serve a registrare spese e movimenti di contante che non derivano
+direttamente da una normale vendita.
+
+Indicatori:
+
+SPESE OGGI
+Totale delle spese registrate nella giornata.
+
+MOVIMENTI CONTANTI
+Riepilogo dei versamenti/prelievi di contante.
+
+RISULTATO GESTIONALE
+Indicatore riepilogativo della situazione gestionale.
+
+======================================================================
+7.1 REGISTRA SPESA
+======================================================================
+
+Campi:
+
+DATA
+Data della spesa.
+
+IMPORTO
+Valore della spesa.
+
+CATEGORIA
+Categorie disponibili:
+- Prodotti
+- Forniture
+- Servizi
+- Manutenzione
+- Utenze
+- Altro
+
+PAGAMENTO
+- Contanti
+- Carta / Banca
+
+FORNITORE
+Permette di associare la spesa a un fornitore censito.
+
+DOCUMENTO
+Numero fattura, scontrino o altro riferimento.
+
+NOTA
+Informazioni aggiuntive.
+
+REGISTRA SPESA
+Salva la spesa nel registro gestionale.
+
+======================================================================
+7.2 MOVIMENTO DI CASSA
+======================================================================
+
+Serve per registrare spostamenti di denaro contante.
+
+Tipi:
+
+VERSAMENTO
+Aggiunge contante alla gestione della cassa.
+
+PRELIEVO
+Registra contante tolto dalla cassa.
+
+Campi:
+- Importo
+- Motivo
+
+Questi movimenti vengono usati nella quadratura interna della cassa.
+
+Esempio:
+se durante la giornata vengono prelevati 100 € dal cassetto e il prelievo non viene
+registrato, a fine giornata il contante fisico potrebbe risultare diverso da quello atteso.
+
+======================================================================
+7.3 REGISTRO MOVIMENTI
+======================================================================
+
+Mostra:
+- spese;
+- versamenti;
+- prelievi.
+
+È possibile selezionare la data da controllare.
+
+======================================================================
+8. RIEPILOGO
+======================================================================
+
+La sezione Riepilogo è la dashboard dell'attività.
+
+Mostra:
+
+INCASSO OGGI
+Totale incassato oggi.
+
+INCASSO MESE
+Totale incassato nel mese corrente.
+
+SCONTRINI OGGI
+Numero di documenti registrati nella giornata.
+
+SOTTO SCORTA
+Numero di prodotti che richiedono attenzione in magazzino.
+
+Altre aree:
+
+ULTIME VENDITE
+Elenco rapido degli ultimi documenti fiscali emessi.
+
+CONTROLLI OPERATIVI
+Situazioni che possono richiedere attenzione.
+
+INCASSI PER PAGAMENTO
+Ripartizione degli incassi del mese per metodo di pagamento.
+
+VENDITE PER OPERATORE
+Riepilogo delle vendite attribuite ai singoli operatori.
+
+VAI ALLA CASSA
+Riporta immediatamente alla schermata di vendita.
+
+======================================================================
+9. CATALOGO - AREA AMMINISTRATORE
+======================================================================
+
+Il Catalogo contiene le anagrafiche usate dalla Cassa.
+
+È suddiviso in:
+- Reparti
+- Categorie
+- Prodotti e servizi
+- Operatori
+- Fornitori
+
+======================================================================
+9.1 REPARTI FISCALI
+======================================================================
+
+Serve ad associare le voci di vendita ai reparti fiscali configurati sul registratore.
+
+Campi principali:
+- Nome
+- ID fiscale
+- IVA
+- Tipo
+- Ordine
+
+Tipi:
+- Servizi
+- Prodotti
+- Altro
+
+CREA REPARTI INIZIALI
+Permette di inizializzare i reparti di base.
+
+SALVA REPARTO
+Salva o modifica il reparto.
+
+======================================================================
+9.2 CATEGORIE
+======================================================================
+
+Serve a organizzare prodotti e servizi visualizzati in cassa.
+
+Campi:
+- Nome
+- Reparto
+- Ordine
+
+Esempi:
+- Hair
+- Beauty
+- Nails
+- Prodotti
+
+Le categorie rendono più veloce la selezione degli articoli in Cassa.
+
+======================================================================
+9.3 PRODOTTI E SERVIZI
+======================================================================
+
+È il listino dell'app.
+
+Campi principali:
+- Nome
+- SKU
+- Barcode
+- Prezzo
+- Categoria
+- Fornitore
+- Reparto fiscale
+- Tipo
+- Durata servizio
+- Costo acquisto
+- Gestione magazzino
+- Giacenza
+- Scorta minima
+- Attivo / non attivo
+
+TIPO SERVIZIO
+Usato per prestazioni come piega, colore, trattamento, estetica ecc.
+
+TIPO PRODOTTO
+Usato per articoli fisici venduti al cliente.
+
+GESTISCI MAGAZZINO
+Se attivato, il prodotto viene incluso nel controllo delle giacenze.
+
+ATTIVO
+Determina se la voce può essere normalmente utilizzata nella Cassa.
+
+======================================================================
+9.4 OPERATORI
+======================================================================
+
+Serve a configurare le persone a cui possono essere attribuite le vendite e i servizi.
+
+Campi:
+- Nome operatore
+- Ruolo
+- Commissione %
+- Attivo
+
+Ruoli previsti:
+- Hair
+- Beauty
+- Nails
+- Reception
+
+La corretta attribuzione dell'operatore permette di ottenere il riepilogo delle vendite per
+operatore.
+
+======================================================================
+9.5 FORNITORI
+======================================================================
+
+Anagrafica dei fornitori.
+
+Campi:
+- Ragione sociale
+- Telefono
+- Email
+- Partita IVA
+- Note
+
+I fornitori possono essere collegati ai prodotti e alle spese.
+
+======================================================================
+10. IMPOSTAZIONI - AREA AMMINISTRATORE
+======================================================================
+
+Questa sezione contiene la configurazione generale dell'attività e del registratore.
+
+======================================================================
+10.1 PROFILO ATTIVITÀ
+======================================================================
+
+Campi:
+- Nome attività
+- Telefono
+- Instagram
+- Link prenotazioni
+- Punti fedeltà per €
+- Descrizione
+
+SALVA PROFILO ATTIVITÀ
+Memorizza i dati inseriti.
+
+======================================================================
+10.2 REGISTRATORE TELEMATICO DADO RT30
+======================================================================
+
+Mostra la configurazione del registratore e le funzioni fiscali abilitate.
+
+Informazioni mostrate:
+- Stato
+- Pagamenti supportati
+- Operazioni post-vendita
+- Chiusura fiscale
+
+Pulsanti:
+
+SALVA
+Salva la configurazione prevista dall'app.
+
+VERIFICA CONNESSIONE
+Controlla la comunicazione con il registratore.
+
+VERIFICA CARTA
+Esegue il controllo del profilo di pagamento elettronico configurato.
+
+RIPRISTINA PROFILO
+Ripristina il profilo previsto per il registratore.
+
+DETTAGLI TECNICI
+Mostra le informazioni tecniche della configurazione del DADO.
+
+Questa parte va modificata soltanto quando necessario e da personale che conosce la
+configurazione del registratore.
+
+======================================================================
+10.3 BACKUP GESTIONALE
+======================================================================
+
+ESPORTA BACKUP
+Esporta una copia delle configurazioni principali del gestionale.
+
+IMPORTA BACKUP
+Permette di caricare un backup gestionale compatibile.
+
+Questo backup manuale è distinto dal backup automatico Firebase/GitHub configurato per
+l'infrastruttura del progetto.
+
+======================================================================
+11. PROCEDURA CONSIGLIATA DURANTE LA GIORNATA
+======================================================================
+
+INIZIO GIORNATA
+1. Accedi all'app.
+2. Verifica che Cassa e Registratore risultino correttamente disponibili.
+3. Controlla il registratore se viene segnalato un problema.
+
+DURANTE LA GIORNATA
+1. Registra normalmente le vendite dalla sezione Cassa.
+2. Usa Scontrini per verifiche o ristampe.
+3. Registra eventuali spese, versamenti o prelievi in Movimenti.
+4. Controlla Magazzino quando necessario.
+
+FINE GIORNATA
+1. Apri Chiusura.
+2. Conta fisicamente il denaro.
+3. Inserisci i Contanti effettivi.
+4. Registra la quadratura.
+5. Spunta la conferma di sicurezza.
+6. Esegui la chiusura fiscale.
+7. Attendi la stampa del registratore.
+8. Controlla l'esito/invio.
+9. Verifica che la giornata risulti registrata nello storico.
+
+======================================================================
+12. DIFFERENZA TRA LE OPERAZIONI IMPORTANTI
+======================================================================
+
+QUADRATURA
+Controllo gestionale della cassa e del contante.
+
+CHIUSURA FISCALE
+Operazione fiscale eseguita sul registratore telematico.
+
+STAMPA TOTALI
+Stampa di controllo; non equivale automaticamente alla chiusura fiscale.
+
+STORNO
+Annullamento fiscale di un documento secondo il flusso previsto.
+
+RESO
+Operazione successiva a una vendita già emessa.
+
+RISTAMPA
+Produce una copia del documento senza creare una nuova vendita.
+
+MOVIMENTO DI CASSA
+Versamento o prelievo gestionale che influenza il controllo del contante.
+
+======================================================================
+FINE GUIDA
+======================================================================
