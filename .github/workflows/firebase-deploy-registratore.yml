@@ -1,6 +1,10 @@
 name: Firebase deploy - registratore
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/firebase-deploy-registratore.yml"
   workflow_dispatch:
     inputs:
       ref:
