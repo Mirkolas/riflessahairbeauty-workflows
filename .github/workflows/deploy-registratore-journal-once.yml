@@ -1,0 +1,78 @@
+name: Deploy registratore journal - una tantum
+
+on:
+  push:
+    paths:
+      - ".github/workflows/deploy-registratore-journal-once.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: firebase-deploy-registratore
+  cancel-in-progress: false
+
+env:
+  PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID }}
+  HOSTING_TARGET: ${{ vars.FIREBASE_HOSTING_TARGET }}
+  SOURCE_PAT: ${{ secrets.PUBLIC_REPO_TOKEN }}
+  GOOGLE_CREDENTIALS_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+
+jobs:
+  deploy:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Verifica configurazione
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "${PROJECT_ID}" ]]
+          [[ "${HOSTING_TARGET}" == "registratore" ]]
+          [[ -n "${SOURCE_PAT}" ]]
+          [[ -n "${GOOGLE_CREDENTIALS_JSON}" ]]
+
+      - name: Checkout applicazione
+        uses: actions/checkout@v4
+        with:
+          repository: Mirkolas/riflessahairbeauty
+          ref: main
+          token: ${{ env.SOURCE_PAT }}
+          path: app
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Configura Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Installa dipendenze
+        working-directory: app/riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
+        run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Esegui test
+        working-directory: app/riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
+        run: npm test
+
+      - name: Verifica progetto
+        working-directory: app/riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
+        run: npm run check
+
+      - name: Autenticazione Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ env.GOOGLE_CREDENTIALS_JSON }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Deploy Hosting e Firestore Rules
+        working-directory: app/riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./node_modules/.bin/firebase deploy \
+            --project "${PROJECT_ID}" \
+            --only "firestore:rules,hosting:${HOSTING_TARGET}" \
+            --non-interactive
