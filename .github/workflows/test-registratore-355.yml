@@ -56,3 +56,18 @@ jobs:
         working-directory: source/${{ env.APP_DIR }}
         shell: bash
         run: npx firebase emulators:exec --only firestore --project riflessa-15a20 "node -e \"console.log('Firestore rules OK')\""
+
+      - name: Allinea package-lock della candidata
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "Riflessa CI"
+          git config user.email "actions@users.noreply.github.com"
+          git add "${APP_DIR}/package-lock.json"
+          if git diff --cached --quiet; then
+            echo "package-lock già allineato"
+            exit 0
+          fi
+          git commit -m "Allinea package-lock registratore 3.5.5"
+          git push "https://x-access-token:${SOURCE_PAT}@github.com/${SOURCE_REPOSITORY}.git" "HEAD:${SOURCE_REF}"
