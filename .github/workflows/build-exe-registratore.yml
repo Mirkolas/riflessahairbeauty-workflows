@@ -1,0 +1,147 @@
+name: Build EXE - registratore
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/build-exe-registratore.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-exe-registratore
+  cancel-in-progress: false
+
+env:
+  SOURCE_REPOSITORY: Mirkolas/riflessahairbeauty
+  APP_DIR: riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
+  SOURCE_PAT: ${{ secrets.PUBLIC_REPO_TOKEN }}
+
+jobs:
+  verifica-versione:
+    name: Verifica nuova versione
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.check.outputs.build }}
+      version: ${{ steps.check.outputs.version }}
+      source_sha: ${{ steps.check.outputs.source_sha }}
+      installer_name: ${{ steps.check.outputs.installer_name }}
+    steps:
+      - name: Verifica secret repo privata
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${SOURCE_PAT}" || { echo "PUBLIC_REPO_TOKEN mancante"; exit 1; }
+
+      - name: Checkout sorgente privato
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          ref: main
+          token: ${{ env.SOURCE_PAT }}
+          path: source
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Controlla se la versione ha gia un EXE
+        id: check
+        shell: bash
+        env:
+          GH_TOKEN: ${{ env.SOURCE_PAT }}
+        run: |
+          set -euo pipefail
+          cd "source/${APP_DIR}"
+          VERSION="$(node -p "require('./package.json').version")"
+          SOURCE_SHA="$(git -C ../.. rev-parse HEAD 2>/dev/null || git -C ../../.. rev-parse HEAD)"
+          TAG="registratore-v${VERSION}"
+          INSTALLER="RiflessaRegistratore-Setup-${VERSION}-x64.exe"
+
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "source_sha=${SOURCE_SHA}" >> "$GITHUB_OUTPUT"
+          echo "installer_name=${INSTALLER}" >> "$GITHUB_OUTPUT"
+
+          ASSETS="$(gh release view "${TAG}" --repo "${SOURCE_REPOSITORY}" --json assets --jq '.assets[].name' 2>/dev/null || true)"
+          if printf '%s\n' "${ASSETS}" | grep -Fxq "${INSTALLER}"; then
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "Versione ${VERSION}: EXE gia presente nella release privata."
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            echo "Versione ${VERSION}: nuovo EXE da generare."
+          fi
+
+  build-windows:
+    name: Build Windows x64
+    needs: verifica-versione
+    if: needs.verifica-versione.outputs.build == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 35
+    env:
+      VERSION: ${{ needs.verifica-versione.outputs.version }}
+      SOURCE_SHA: ${{ needs.verifica-versione.outputs.source_sha }}
+      INSTALLER_NAME: ${{ needs.verifica-versione.outputs.installer_name }}
+    steps:
+      - name: Checkout versione esatta della repo privata
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          ref: ${{ env.SOURCE_SHA }}
+          token: ${{ env.SOURCE_PAT }}
+          path: source
+          persist-credentials: false
+
+      - name: Configura Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Installa dipendenze
+        working-directory: source/${{ env.APP_DIR }}
+        run: npm install --no-audit --no-fund
+
+      - name: Esegui test
+        working-directory: source/${{ env.APP_DIR }}
+        run: npm test
+
+      - name: Verifica progetto
+        working-directory: source/${{ env.APP_DIR }}
+        run: npm run check
+
+      - name: Genera installer EXE
+        working-directory: source/${{ env.APP_DIR }}
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: npm run dist
+
+      - name: Verifica installer
+        shell: pwsh
+        working-directory: source/${{ env.APP_DIR }}
+        run: |
+          $expected = Join-Path "dist" $env:INSTALLER_NAME
+          if (-not (Test-Path $expected -PathType Leaf)) { throw "Installer atteso non trovato: $expected" }
+          $file = Get-Item $expected
+          Write-Host "EXE pronto: $($file.Name) - $([math]::Round($file.Length / 1MB, 2)) MB"
+
+      - name: Pubblica EXE nella release PRIVATA dell'app
+        shell: pwsh
+        working-directory: source/${{ env.APP_DIR }}
+        env:
+          GH_TOKEN: ${{ env.SOURCE_PAT }}
+        run: |
+          $tag = "registratore-v$env:VERSION"
+          $asset = Join-Path "dist" $env:INSTALLER_NAME
+          $title = "Riflessa Registratore v$env:VERSION"
+          $notes = "Installer Windows x64 generato automaticamente dopo i test. Commit sorgente: $env:SOURCE_SHA"
+
+          gh release view $tag --repo $env:SOURCE_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $asset --clobber --repo $env:SOURCE_REPOSITORY
+          } else {
+            gh release create $tag $asset --repo $env:SOURCE_REPOSITORY --target $env:SOURCE_SHA --title $title --notes $notes
+          }
+
+          if ($LASTEXITCODE -ne 0) { throw "Pubblicazione release fallita" }
+          Write-Host "Release privata pronta: $tag / $env:INSTALLER_NAME"
