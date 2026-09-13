@@ -26,22 +26,8 @@ jobs:
           from pathlib import Path
           p=Path('scripts/backup-registratore-v3.cjs')
           s=p.read_text()
-          old="""async function markPhase(state, name, metadata) {
-  state.phases[name] = { ...metadata, completedAt: new Date().toISOString(), attempt: ATTEMPT };
-  saveState(state);
-  await persistCheckpoint(state, name);
-  console.log(`CHECKPOINT ${name}: completato.`);
-}
-"""
-          new="""async function markPhase(state, name, metadata) {
-  state.phases[name] = { ...metadata, completedAt: new Date().toISOString(), attempt: ATTEMPT };
-  state.lastAttempt = ATTEMPT;
-  state.updatedAt = new Date().toISOString();
-  await persistCheckpoint(state, name);
-  writeJsonAtomic(STATE_FILE, state);
-  console.log(`CHECKPOINT ${name}: completato.`);
-}
-"""
+          old="async function markPhase(state, name, metadata) {\n  state.phases[name] = { ...metadata, completedAt: new Date().toISOString(), attempt: ATTEMPT };\n  saveState(state);\n  await persistCheckpoint(state, name);\n  console.log(`CHECKPOINT ${name}: completato.`);\n}\n"
+          new="async function markPhase(state, name, metadata) {\n  state.phases[name] = { ...metadata, completedAt: new Date().toISOString(), attempt: ATTEMPT };\n  state.lastAttempt = ATTEMPT;\n  state.updatedAt = new Date().toISOString();\n  await persistCheckpoint(state, name);\n  writeJsonAtomic(STATE_FILE, state);\n  console.log(`CHECKPOINT ${name}: completato.`);\n}\n"
           if s.count(old)!=1:
               raise SystemExit(f'markPhase inatteso: {s.count(old)} match')
           p.write_text(s.replace(old,new,1))
