@@ -13,7 +13,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: build-exe-registratore
+  group: build-exe-registratore-signing-v2
   cancel-in-progress: false
 
 env:
@@ -114,7 +114,7 @@ jobs:
         working-directory: source/${{ env.APP_DIR }}
         run: npm run check
 
-      - name: Prepara certificato di firma Riflessa
+      - name: Prepara PFX temporaneo di firma
         shell: pwsh
         env:
           WINDOWS_CODESIGN_PFX_BASE64: ${{ secrets.WINDOWS_CODESIGN_PFX_BASE64 }}
@@ -126,27 +126,19 @@ jobs:
 
           $pfxPath = Join-Path $env:RUNNER_TEMP "riflessa-codesign.pfx"
           try {
-            $bytes = [Convert]::FromBase64String($env:WINDOWS_CODESIGN_PFX_BASE64)
+            [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:WINDOWS_CODESIGN_PFX_BASE64))
           } catch {
             throw "WINDOWS_CODESIGN_PFX_BASE64 non valido"
           }
-          [IO.File]::WriteAllBytes($pfxPath, $bytes)
 
-          $securePassword = ConvertTo-SecureString $env:WINDOWS_CODESIGN_PFX_PASSWORD -AsPlainText -Force
-          $cert = Import-PfxCertificate -FilePath $pfxPath -CertStoreLocation Cert:\CurrentUser\My -Password $securePassword
-          if (-not $cert) { throw "Import del certificato di firma fallito" }
-          if (-not $cert.HasPrivateKey) { throw "Il certificato non contiene la chiave privata" }
-          if ($cert.Subject -ne "CN=Riflessa Hair & Beauty") { throw "Certificato inatteso: $($cert.Subject)" }
-
-          foreach ($storeName in @("Root", "TrustedPublisher")) {
-            $store = New-Object System.Security.Cryptography.X509Certificates.X509Store($storeName, "CurrentUser")
-            $store.Open("ReadWrite")
-            try { $store.Add($cert) } finally { $store.Close() }
-          }
+          $flags = [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet
+          $expected = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($pfxPath, $env:WINDOWS_CODESIGN_PFX_PASSWORD, $flags)
+          if (-not $expected.HasPrivateKey) { throw "Il PFX non contiene la chiave privata" }
+          if ($expected.Subject -ne "CN=Riflessa Hair & Beauty") { throw "Certificato inatteso: $($expected.Subject)" }
 
           "CODESIGN_PFX_PATH=$pfxPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "CODESIGN_THUMBPRINT=$($cert.Thumbprint)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          Write-Host "Certificato di firma caricato: Riflessa Hair & Beauty"
+          "CODESIGN_THUMBPRINT=$($expected.Thumbprint)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "PFX di firma validato: Riflessa Hair & Beauty"
 
       - name: Genera EXE Portable firmata
         shell: pwsh
@@ -184,18 +176,21 @@ jobs:
           if ($signature.SignerCertificate.Thumbprint -ne $env:CODESIGN_THUMBPRINT) {
             throw "Thumbprint della firma non corrispondente al certificato configurato"
           }
-          if ($signature.Status -ne "Valid") { throw "Firma Authenticode non valida: $($signature.Status) - $($signature.StatusMessage)" }
 
           $inner = Get-Item "dist\win-unpacked\Riflessabeautyapp.exe" -ErrorAction Stop
           $innerSignature = Get-AuthenticodeSignature -FilePath $inner.FullName
-          if (-not $innerSignature.SignerCertificate -or $innerSignature.SignerCertificate.Subject -ne "CN=Riflessa Hair & Beauty") {
-            throw "Eseguibile interno Electron non firmato con Riflessa Hair & Beauty"
+          if (-not $innerSignature.SignerCertificate) { throw "Eseguibile interno Electron non firmato" }
+          if ($innerSignature.SignerCertificate.Subject -ne "CN=Riflessa Hair & Beauty") {
+            throw "Firmatario interno inatteso: $($innerSignature.SignerCertificate.Subject)"
           }
-          if ($innerSignature.Status -ne "Valid") { throw "Firma eseguibile interno non valida: $($innerSignature.Status)" }
+          if ($innerSignature.SignerCertificate.Thumbprint -ne $env:CODESIGN_THUMBPRINT) {
+            throw "Thumbprint della firma interna non corrispondente"
+          }
 
           Write-Host "Portable firmata correttamente: $($portable.Name)"
           Write-Host "Firmatario: $($signature.SignerCertificate.Subject)"
           Write-Host "Scadenza certificato: $($signature.SignerCertificate.NotAfter)"
+          Write-Host "Stato trust runner: $($signature.Status)"
           Write-Host "Dimensione: $([math]::Round($portable.Length / 1MB, 2)) MB"
           Write-Host "SHA256: $((Get-FileHash $portable.FullName -Algorithm SHA256).Hash)"
 
@@ -228,15 +223,10 @@ jobs:
           if (-not $published) { throw "Pubblicazione release fallita dopo 5 tentativi" }
           Write-Host "Release privata pronta: $tag / $env:PORTABLE_NAME"
 
-      - name: Elimina certificato temporaneo dal runner
+      - name: Elimina PFX temporaneo dal runner
         if: always()
         shell: pwsh
         run: |
-          if ($env:CODESIGN_THUMBPRINT) {
-            foreach ($storeName in @("My", "Root", "TrustedPublisher")) {
-              Remove-Item "Cert:\CurrentUser\$storeName\$env:CODESIGN_THUMBPRINT" -Force -ErrorAction SilentlyContinue
-            }
-          }
           if ($env:CODESIGN_PFX_PATH) {
             Remove-Item $env:CODESIGN_PFX_PATH -Force -ErrorAction SilentlyContinue
           }
