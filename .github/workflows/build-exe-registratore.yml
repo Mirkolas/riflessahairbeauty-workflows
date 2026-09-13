@@ -29,7 +29,6 @@ jobs:
       build: ${{ steps.check.outputs.build }}
       version: ${{ steps.check.outputs.version }}
       source_sha: ${{ steps.check.outputs.source_sha }}
-      installer_name: ${{ steps.check.outputs.installer_name }}
       portable_name: ${{ steps.check.outputs.portable_name }}
     steps:
       - name: Verifica secret repo privata
@@ -48,7 +47,7 @@ jobs:
           persist-credentials: false
           fetch-depth: 1
 
-      - name: Controlla se la versione ha gia entrambi gli EXE
+      - name: Controlla se la Portable della versione esiste gia
         id: check
         shell: bash
         env:
@@ -59,30 +58,23 @@ jobs:
           VERSION="$(node -p "require('./package.json').version")"
           SOURCE_SHA="$(git -C ../.. rev-parse HEAD)"
           TAG="registratore-v${VERSION}"
-          INSTALLER="riflessa-app-${VERSION}-setup.exe"
           PORTABLE="riflessa-app-${VERSION}.exe"
 
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "source_sha=${SOURCE_SHA}" >> "$GITHUB_OUTPUT"
-          echo "installer_name=${INSTALLER}" >> "$GITHUB_OUTPUT"
           echo "portable_name=${PORTABLE}" >> "$GITHUB_OUTPUT"
 
           ASSETS="$(gh release view "${TAG}" --repo "${SOURCE_REPOSITORY}" --json assets --jq '.assets[].name' 2>/dev/null || true)"
-          HAS_INSTALLER=false
-          HAS_PORTABLE=false
-          printf '%s\n' "${ASSETS}" | grep -Fxq "${INSTALLER}" && HAS_INSTALLER=true || true
-          printf '%s\n' "${ASSETS}" | grep -Fxq "${PORTABLE}" && HAS_PORTABLE=true || true
-
-          if [[ "${HAS_INSTALLER}" == "true" && "${HAS_PORTABLE}" == "true" ]]; then
+          if printf '%s\n' "${ASSETS}" | grep -Fxq "${PORTABLE}"; then
             echo "build=false" >> "$GITHUB_OUTPUT"
-            echo "Versione ${VERSION}: installer e portable gia presenti nella release privata."
+            echo "Versione ${VERSION}: ${PORTABLE} gia presente nella release privata."
           else
             echo "build=true" >> "$GITHUB_OUTPUT"
-            echo "Versione ${VERSION}: build Windows da completare. installer=${HAS_INSTALLER} portable=${HAS_PORTABLE}"
+            echo "Versione ${VERSION}: Portable da generare/pubblicare."
           fi
 
   build-windows:
-    name: Build Windows x64
+    name: Build Windows x64 Portable
     needs: verifica-versione
     if: needs.verifica-versione.outputs.build == 'true'
     runs-on: windows-latest
@@ -90,7 +82,6 @@ jobs:
     env:
       VERSION: ${{ needs.verifica-versione.outputs.version }}
       SOURCE_SHA: ${{ needs.verifica-versione.outputs.source_sha }}
-      INSTALLER_NAME: ${{ needs.verifica-versione.outputs.installer_name }}
       PORTABLE_NAME: ${{ needs.verifica-versione.outputs.portable_name }}
     steps:
       - name: Checkout versione esatta della repo privata
@@ -105,7 +96,7 @@ jobs:
       - name: Configura Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
 
       - name: Installa dipendenze
         working-directory: source/${{ env.APP_DIR }}
@@ -119,58 +110,54 @@ jobs:
         working-directory: source/${{ env.APP_DIR }}
         run: npm run check
 
-      - name: Genera installer e portable
+      - name: Genera EXE Portable
         shell: pwsh
         working-directory: source/${{ env.APP_DIR }}
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: |
+          $ErrorActionPreference = "Stop"
           New-Item -ItemType Directory -Force -Path "release-out" | Out-Null
-
-          npm run dist
-          if ($LASTEXITCODE -ne 0) { throw "Build installer fallita" }
-          $generated = @(Get-ChildItem -Path "dist" -Filter "RiflessaRegistratore-Setup-*.exe" -File)
-          if ($generated.Count -ne 1) { throw "Installer generato non trovato o ambiguo: $($generated.Count)" }
-          Copy-Item $generated[0].FullName (Join-Path "release-out" $env:INSTALLER_NAME) -Force
-
-          Remove-Item -Path "dist" -Recurse -Force
           npm run portable
-          if ($LASTEXITCODE -ne 0) { throw "Build portable fallita" }
+          if ($LASTEXITCODE -ne 0) { throw "Build Portable fallita" }
           $generated = @(Get-ChildItem -Path "dist" -Filter "RiflessaRegistratore-Setup-*.exe" -File)
           if ($generated.Count -ne 1) { throw "Portable generata non trovata o ambigua: $($generated.Count)" }
           Move-Item $generated[0].FullName (Join-Path "release-out" $env:PORTABLE_NAME) -Force
 
-      - name: Verifica file Windows generati
+      - name: Verifica EXE Portable generato
         shell: pwsh
         working-directory: source/${{ env.APP_DIR }}
         run: |
-          $setup = Get-Item (Join-Path "release-out" $env:INSTALLER_NAME)
           $portable = Get-Item (Join-Path "release-out" $env:PORTABLE_NAME)
-          if ($setup.Length -lt 10MB) { throw "Installer troppo piccolo: $($setup.Length)" }
           if ($portable.Length -lt 10MB) { throw "Portable troppo piccola: $($portable.Length)" }
-          Write-Host "Installer: $($setup.Name) - $([math]::Round($setup.Length / 1MB, 2)) MB"
-          Write-Host "Portable:  $($portable.Name) - $([math]::Round($portable.Length / 1MB, 2)) MB"
-          Write-Host "SHA256 installer: $((Get-FileHash $setup.FullName -Algorithm SHA256).Hash)"
-          Write-Host "SHA256 portable:  $((Get-FileHash $portable.FullName -Algorithm SHA256).Hash)"
+          Write-Host "Portable: $($portable.Name) - $([math]::Round($portable.Length / 1MB, 2)) MB"
+          Write-Host "SHA256 portable: $((Get-FileHash $portable.FullName -Algorithm SHA256).Hash)"
 
-      - name: Pubblica entrambi nella release PRIVATA dell'app
+      - name: Pubblica Portable nella release PRIVATA dell'app
         shell: pwsh
         working-directory: source/${{ env.APP_DIR }}
         env:
           GH_TOKEN: ${{ env.SOURCE_PAT }}
         run: |
+          $ErrorActionPreference = "Continue"
           $tag = "registratore-v$env:VERSION"
-          $setup = Join-Path "release-out" $env:INSTALLER_NAME
           $portable = Join-Path "release-out" $env:PORTABLE_NAME
           $title = "Riflessa Registratore v$env:VERSION"
-          $notes = "Build Windows x64 del registratore. Usa normalmente la versione Portable: $env:PORTABLE_NAME. Installer NSIS disponibile come file secondario. Commit sorgente: $env:SOURCE_SHA"
+          $notes = "Build Windows x64 Portable del registratore. File ufficiale: $env:PORTABLE_NAME. Commit sorgente: $env:SOURCE_SHA"
+          $published = $false
 
-          gh release view $tag --repo $env:SOURCE_REPOSITORY *> $null
-          if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag $setup $portable --clobber --repo $env:SOURCE_REPOSITORY
-          } else {
-            gh release create $tag $setup $portable --repo $env:SOURCE_REPOSITORY --target $env:SOURCE_SHA --title $title --notes $notes
+          for ($attempt = 1; $attempt -le 5 -and -not $published; $attempt++) {
+            Write-Host "Tentativo pubblicazione $attempt/5"
+            gh release view $tag --repo $env:SOURCE_REPOSITORY *> $null
+            if ($LASTEXITCODE -eq 0) {
+              gh release upload $tag $portable --clobber --repo $env:SOURCE_REPOSITORY
+              if ($LASTEXITCODE -eq 0) { $published = $true; break }
+            } else {
+              gh release create $tag $portable --repo $env:SOURCE_REPOSITORY --target $env:SOURCE_SHA --title $title --notes $notes
+              if ($LASTEXITCODE -eq 0) { $published = $true; break }
+            }
+            if ($attempt -lt 5) { Start-Sleep -Seconds (10 * $attempt) }
           }
 
-          if ($LASTEXITCODE -ne 0) { throw "Pubblicazione release fallita" }
+          if (-not $published) { throw "Pubblicazione release fallita dopo 5 tentativi" }
           Write-Host "Release privata pronta: $tag / $env:PORTABLE_NAME"
