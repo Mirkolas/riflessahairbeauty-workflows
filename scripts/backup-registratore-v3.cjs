@@ -15,6 +15,8 @@ const BACKUP_NAME = process.env.BACKUP_NAME;
 const PROJECT_ID = process.env.PROJECT_ID;
 const AUTH_HASH_CONFIG = process.env.AUTH_HASH_CONFIG;
 const ATTEMPT = Number(process.env.ATTEMPT || 1);
+const BACKUP_REPO_DIR = process.env.BACKUP_REPO_DIR || process.cwd();
+const PERSISTENT_CHECKPOINT_DIR = process.env.PERSISTENT_CHECKPOINT_DIR || '';
 const JOURNAL_COLLECTION = '_backupChanges';
 const LOG_ROOT = 'registratoreLogFiles';
 const PART_LIMIT = 15 * 1024 * 1024;
@@ -31,6 +33,12 @@ const AUTH_FILE = path.join(PAYLOAD_DIR, 'authentication.enc.json');
 const HOSTING_DIR = path.join(PAYLOAD_DIR, 'hosting');
 const APP_CONFIG_DIR = path.join(PAYLOAD_DIR, 'app-config');
 const LOG_CHANGES_FILE = path.join(CHECKPOINT_DIR, 'log-changes.json');
+const PHASE_PATHS = {
+  firestore: ['payload/firestore', 'log-changes.json'],
+  auth: ['payload/authentication.enc.json'],
+  hosting: ['payload/hosting', 'payload/app-config', 'payload/hosting-manifest.json'],
+  logs: ['payload/logs']
+};
 
 fs.mkdirSync(CHECKPOINT_DIR, { recursive: true });
 fs.mkdirSync(PAYLOAD_DIR, { recursive: true });
@@ -43,11 +51,7 @@ function writeJsonAtomic(file, value) {
   fs.renameSync(tmp, file);
 }
 function sha256Buffer(value) { return crypto.createHash('sha256').update(value).digest('hex'); }
-function sha256File(file) {
-  const hash = crypto.createHash('sha256');
-  hash.update(fs.readFileSync(file));
-  return hash.digest('hex');
-}
+function sha256File(file) { return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex'); }
 function listFilesRecursive(root, prefix = '') {
   if (!fs.existsSync(root)) return [];
   const out = [];
@@ -68,6 +72,11 @@ function hashTree(root) {
   return { sha256: hash.digest('hex'), fileCount: files.length, files };
 }
 function removeAndCreate(dir) { fs.rmSync(dir, { recursive: true, force: true }); fs.mkdirSync(dir, { recursive: true }); }
+function run(command, args, options = {}) {
+  const result = spawnSync(command, args, { encoding: 'utf8', ...options });
+  if (result.status !== 0) throw new Error(`${command} ${args.join(' ')} fallito: ${(result.stderr || result.stdout || '').trim()}`);
+  return result;
+}
 function parseHashConfig(raw) {
   try { return JSON.parse(raw); } catch {}
   const cfg = {};
@@ -92,14 +101,102 @@ function normalizedHashConfig(raw) {
 }
 function authCanonical() { return JSON.stringify(normalizedHashConfig(AUTH_HASH_CONFIG)); }
 function deriveKey(domain) { return crypto.createHash('sha256').update(`${domain}\0${authCanonical()}`).digest(); }
+function encryptJson(value, domain) {
+  const iv = crypto.randomBytes(12), cipher = crypto.createCipheriv('aes-256-gcm', deriveKey(domain), iv);
+  const ciphertext = Buffer.concat([cipher.update(Buffer.from(JSON.stringify(value), 'utf8')), cipher.final()]);
+  return { format: 'riflessa-checkpoint-json-aes256gcm-v1', iv: iv.toString('base64'), authTag: cipher.getAuthTag().toString('base64'), ciphertext: ciphertext.toString('base64') };
+}
+function decryptJson(envelope, domain) {
+  if (envelope.format !== 'riflessa-checkpoint-json-aes256gcm-v1') throw new Error('Envelope checkpoint non valido');
+  const decipher = crypto.createDecipheriv('aes-256-gcm', deriveKey(domain), Buffer.from(envelope.iv, 'base64'));
+  decipher.setAuthTag(Buffer.from(envelope.authTag, 'base64'));
+  return JSON.parse(Buffer.concat([decipher.update(Buffer.from(envelope.ciphertext, 'base64')), decipher.final()]).toString('utf8'));
+}
+async function encryptFileWithDomain(input, output, domain) {
+  const iv = crypto.randomBytes(12), cipher = crypto.createCipheriv('aes-256-gcm', deriveKey(domain), iv);
+  await pipeline(fs.createReadStream(input), cipher, fs.createWriteStream(output));
+  return { iv: iv.toString('base64'), authTag: cipher.getAuthTag().toString('base64'), plainSha256: sha256File(input), cipherSha256: sha256File(output), bytes: fs.statSync(output).size };
+}
+async function decryptFileWithDomain(input, output, meta, domain) {
+  if (sha256File(input) !== meta.cipherSha256) throw new Error(`Hash checkpoint cifrato non valido: ${path.basename(input)}`);
+  const decipher = crypto.createDecipheriv('aes-256-gcm', deriveKey(domain), Buffer.from(meta.iv, 'base64'));
+  decipher.setAuthTag(Buffer.from(meta.authTag, 'base64'));
+  await pipeline(fs.createReadStream(input), decipher, fs.createWriteStream(output));
+  if (sha256File(output) !== meta.plainSha256) throw new Error(`Hash checkpoint decifrato non valido: ${path.basename(input)}`);
+}
+
+function persistentEnabled() { return Boolean(PERSISTENT_CHECKPOINT_DIR); }
+function checkpointRelativePath() {
+  const rel = path.relative(BACKUP_REPO_DIR, PERSISTENT_CHECKPOINT_DIR).replace(/\\/g, '/');
+  if (!rel || rel.startsWith('..')) throw new Error('PERSISTENT_CHECKPOINT_DIR deve essere dentro BACKUP_REPO_DIR');
+  return rel;
+}
+async function persistCheckpoint(state, phaseName) {
+  if (!persistentEnabled()) return;
+  const rel = checkpointRelativePath();
+  fs.mkdirSync(PERSISTENT_CHECKPOINT_DIR, { recursive: true });
+  const paths = PHASE_PATHS[phaseName];
+  if (!paths) throw new Error(`Fase checkpoint sconosciuta: ${phaseName}`);
+  for (const item of paths) if (!fs.existsSync(path.join(CHECKPOINT_DIR, item))) throw new Error(`Artefatto checkpoint assente: ${item}`);
+
+  const tempTar = path.join(CHECKPOINT_DIR, `persist-${phaseName}.tar.gz`);
+  fs.rmSync(tempTar, { force: true });
+  const tar = spawnSync('tar', ['-czf', tempTar, '-C', CHECKPOINT_DIR, ...paths], { stdio: 'inherit' });
+  if (tar.status !== 0) throw new Error(`Creazione checkpoint persistente ${phaseName} non riuscita`);
+  const encrypted = path.join(PERSISTENT_CHECKPOINT_DIR, `${phaseName}.enc`);
+  const meta = await encryptFileWithDomain(tempTar, encrypted, `riflessa-checkpoint-phase-v1:${phaseName}`);
+  writeJsonAtomic(path.join(PERSISTENT_CHECKPOINT_DIR, `${phaseName}.manifest.json`), { format: 'riflessa-checkpoint-phase-v1', phase: phaseName, ...meta });
+  fs.rmSync(tempTar, { force: true });
+
+  writeJsonAtomic(path.join(PERSISTENT_CHECKPOINT_DIR, 'state.enc.json'), encryptJson(state, 'riflessa-checkpoint-state-v1'));
+  writeJsonAtomic(path.join(PERSISTENT_CHECKPOINT_DIR, 'resume.json'), {
+    format: 'riflessa-persistent-checkpoint-v1', projectId: PROJECT_ID, backupName: BACKUP_NAME,
+    sourceCommit: SOURCE_COMMIT, previousBackupName: PREVIOUS_BACKUP_NAME, boundary: state.boundary,
+    completedPhases: Object.keys(state.phases || {}).filter(name => state.phases[name]?.completedAt), updatedAt: new Date().toISOString()
+  });
+
+  run('git', ['-C', BACKUP_REPO_DIR, 'add', '-A', '--', rel]);
+  const diff = spawnSync('git', ['-C', BACKUP_REPO_DIR, 'diff', '--cached', '--quiet', '--', rel]);
+  if (diff.status === 0) return;
+  run('git', ['-C', BACKUP_REPO_DIR, 'commit', '-m', `Checkpoint backup registratore ${BACKUP_NAME} - ${phaseName}`, '--', rel], { stdio: 'pipe' });
+  run('git', ['-C', BACKUP_REPO_DIR, 'push', 'origin', 'HEAD:main'], { stdio: 'pipe' });
+  console.log(`CHECKPOINT PERSISTENTE ${phaseName}: cifrato e salvato nel repository privato.`);
+}
+async function restorePersistentCheckpoint() {
+  if (!persistentEnabled() || fs.existsSync(STATE_FILE)) return;
+  const resumeFile = path.join(PERSISTENT_CHECKPOINT_DIR, 'resume.json');
+  const stateEnvelopeFile = path.join(PERSISTENT_CHECKPOINT_DIR, 'state.enc.json');
+  if (!fs.existsSync(resumeFile) && !fs.existsSync(stateEnvelopeFile)) return;
+  if (!fs.existsSync(resumeFile) || !fs.existsSync(stateEnvelopeFile)) throw new Error('Checkpoint persistente incompleto');
+  const resume = readJson(resumeFile);
+  if (resume.format !== 'riflessa-persistent-checkpoint-v1' || resume.projectId !== PROJECT_ID || resume.backupName !== BACKUP_NAME || resume.sourceCommit !== SOURCE_COMMIT) {
+    throw new Error('Checkpoint persistente riferito a progetto/backup/commit diverso');
+  }
+  const state = decryptJson(readJson(stateEnvelopeFile), 'riflessa-checkpoint-state-v1');
+  if (state.projectId !== PROJECT_ID || state.backupName !== BACKUP_NAME || state.sourceCommit !== SOURCE_COMMIT) throw new Error('Stato checkpoint persistente non coerente');
+  writeJsonAtomic(STATE_FILE, state);
+
+  for (const phaseName of Object.keys(PHASE_PATHS)) {
+    if (!state.phases?.[phaseName]?.completedAt) continue;
+    const encrypted = path.join(PERSISTENT_CHECKPOINT_DIR, `${phaseName}.enc`);
+    const manifestFile = path.join(PERSISTENT_CHECKPOINT_DIR, `${phaseName}.manifest.json`);
+    if (!fs.existsSync(encrypted) || !fs.existsSync(manifestFile)) throw new Error(`Checkpoint persistente ${phaseName} mancante`);
+    const meta = readJson(manifestFile);
+    if (meta.format !== 'riflessa-checkpoint-phase-v1' || meta.phase !== phaseName) throw new Error(`Manifest checkpoint ${phaseName} non valido`);
+    const tempTar = path.join(CHECKPOINT_DIR, `restore-${phaseName}.tar.gz`);
+    await decryptFileWithDomain(encrypted, tempTar, meta, `riflessa-checkpoint-phase-v1:${phaseName}`);
+    const tar = spawnSync('tar', ['-xzf', tempTar, '-C', CHECKPOINT_DIR], { stdio: 'inherit' });
+    fs.rmSync(tempTar, { force: true });
+    if (tar.status !== 0) throw new Error(`Estrazione checkpoint persistente ${phaseName} non riuscita`);
+  }
+  console.log(`RESUME CROSS-RUN: checkpoint ${BACKUP_NAME} ricostruito dal repository privato.`);
+}
 
 function initializeState() {
   if (fs.existsSync(STATE_FILE)) {
     const state = readJson(STATE_FILE);
     if (state.format !== 'riflessa-backup-checkpoint-v1') throw new Error('Checkpoint con formato non valido');
-    if (state.projectId !== PROJECT_ID || state.backupName !== BACKUP_NAME || state.sourceCommit !== SOURCE_COMMIT) {
-      throw new Error('Checkpoint riferito a progetto/backup/commit diverso');
-    }
+    if (state.projectId !== PROJECT_ID || state.backupName !== BACKUP_NAME || state.sourceCommit !== SOURCE_COMMIT) throw new Error('Checkpoint riferito a progetto/backup/commit diverso');
     return state;
   }
   const state = {
@@ -116,9 +213,10 @@ function phaseValid(state, name, validator) {
   if (!phase?.completedAt) return false;
   try { return validator(phase); } catch { return false; }
 }
-function markPhase(state, name, metadata) {
+async function markPhase(state, name, metadata) {
   state.phases[name] = { ...metadata, completedAt: new Date().toISOString(), attempt: ATTEMPT };
   saveState(state);
+  await persistCheckpoint(state, name);
   console.log(`CHECKPOINT ${name}: completato.`);
 }
 
@@ -230,11 +328,14 @@ function readPreviousMaps(previous) {
     return { core, logs, journalCursor: fm.journalCursor || null };
   }
   const pm = readJson(path.join(previous.root, 'manifest.json'));
-  return {
-    core: readSnapshot(path.join(previous.root, 'firestore')).documents,
-    logs: readSnapshot(path.join(previous.root, 'logs')).documents,
-    journalCursor: pm.firestore?.journalCursor || null
-  };
+  return { core: readSnapshot(path.join(previous.root, 'firestore')).documents, logs: readSnapshot(path.join(previous.root, 'logs')).documents, journalCursor: pm.firestore?.journalCursor || null };
+}
+async function loadPreviousBaseOrNull(label) {
+  try { return readPreviousMaps(await previousPayloadRoot()); }
+  catch (error) {
+    console.warn(`${label}: base locale/archivio precedente non utilizzabile (${error.message || error}). E consentito il fallback full.`);
+    return null;
+  }
 }
 function timestampFromIso(value) {
   const d = new Date(value); if (Number.isNaN(d.getTime())) throw new Error(`Timestamp non valido: ${value}`);
@@ -249,31 +350,26 @@ async function phaseFirestore(state) {
   fs.rmSync(LOG_CHANGES_FILE, { force: true });
   const boundary = state.boundary ? timestampFromIso(state.boundary) : admin.firestore.Timestamp.now();
   if (!state.boundary) { state.boundary = boundary.toDate().toISOString(); saveState(state); }
-  let mode = 'full', previous = null, journalDocumentsRead = 0, changedCore = [], changedLogs = [], documents;
-  try {
-    previous = readPreviousMaps(await previousPayloadRoot());
-    if (previous?.journalCursor) {
-      const from = timestampFromIso(previous.journalCursor);
-      const journal = await db.collection(JOURNAL_COLLECTION).where('changedAt', '>', from).where('changedAt', '<=', boundary).orderBy('changedAt', 'asc').get();
-      journalDocumentsRead = journal.size;
-      const latestCore = new Map(), latestLogs = new Map();
-      for (const jd of journal.docs) {
-        const data = jd.data() || {};
-        if (Number(data.schemaVersion || 0) !== 1 || !Array.isArray(data.changes)) throw new Error(`Journal non valido: ${jd.ref.path}`);
-        for (const change of data.changes) {
-          const p = String(change?.path || ''); if (!p || p.split('/')[0] === JOURNAL_COLLECTION) continue;
-          (p.split('/')[0] === LOG_ROOT ? latestLogs : latestCore).set(p, String(change.operation || 'update'));
-        }
+  let mode = 'full', journalDocumentsRead = 0, changedCore = [], changedLogs = [], documents;
+  const previous = await loadPreviousBaseOrNull('Firestore incrementale');
+  if (previous?.journalCursor) {
+    const from = timestampFromIso(previous.journalCursor);
+    const journal = await db.collection(JOURNAL_COLLECTION).where('changedAt', '>', from).where('changedAt', '<=', boundary).orderBy('changedAt', 'asc').get();
+    journalDocumentsRead = journal.size;
+    const latestCore = new Map(), latestLogs = new Map();
+    for (const jd of journal.docs) {
+      const data = jd.data() || {};
+      if (Number(data.schemaVersion || 0) !== 1 || !Array.isArray(data.changes)) throw new Error(`Journal Firestore non valido: ${jd.ref.path}`);
+      for (const change of data.changes) {
+        const p = String(change?.path || ''); if (!p || p.split('/')[0] === JOURNAL_COLLECTION) continue;
+        (p.split('/')[0] === LOG_ROOT ? latestLogs : latestCore).set(p, String(change.operation || 'update'));
       }
-      changedCore = [...latestCore.keys()].sort(); changedLogs = [...latestLogs.keys()].sort();
-      documents = new Map(previous.core);
-      const applied = await applyChangedPaths(documents, changedCore);
-      mode = 'incremental';
-      state.incremental = { mode, journalDocumentsRead, changedCorePaths: changedCore.length, changedLogPaths: changedLogs.length, coreChangedDocuments: applied.changedDocuments, coreDeletedDocuments: applied.deletedDocuments };
     }
-  } catch (error) {
-    console.warn(`Base incrementale non utilizzabile: ${error.message || error}. Creo base completa.`);
-    previous = null; mode = 'full';
+    changedCore = [...latestCore.keys()].sort(); changedLogs = [...latestLogs.keys()].sort();
+    documents = new Map(previous.core);
+    const applied = await applyChangedPaths(documents, changedCore);
+    mode = 'incremental';
+    state.incremental = { mode, journalDocumentsRead, changedCorePaths: changedCore.length, changedLogPaths: changedLogs.length, coreChangedDocuments: applied.changedDocuments, coreDeletedDocuments: applied.deletedDocuments };
   }
   if (mode === 'full') {
     documents = new Map();
@@ -287,7 +383,7 @@ async function phaseFirestore(state) {
   const manifest = writeSnapshot(documents, CORE_DIR, 'riflessa-firestore-core-jsonl-v3');
   writeJsonAtomic(LOG_CHANGES_FILE, { mode, boundary: state.boundary, previousBackupName: PREVIOUS_BACKUP_NAME, paths: changedLogs });
   const tree = hashTree(CORE_DIR);
-  markPhase(state, 'firestore', { sha256: tree.sha256, documentCount: manifest.documentCount, mode, journalDocumentsRead, changedCorePaths: changedCore.length, changedLogPaths: changedLogs.length });
+  await markPhase(state, 'firestore', { sha256: tree.sha256, documentCount: manifest.documentCount, mode, journalDocumentsRead, changedCorePaths: changedCore.length, changedLogPaths: changedLogs.length });
 }
 
 function serializeUser(user) {
@@ -330,7 +426,7 @@ async function phaseAuth(state) {
   const payload = { format: 'riflessa-firebase-auth-v1', projectId: PROJECT_ID, createdAt: new Date().toISOString(), users };
   writeJsonAtomic(AUTH_FILE, encryptAuthentication(payload));
   const verified = decryptAuthentication(AUTH_FILE);
-  markPhase(state, 'auth', { sha256: sha256File(AUTH_FILE), accountCount: verified.envelope.accountCount, hashedPasswordCount: verified.envelope.hashedPasswordCount, hashAlgorithm: normalizedHashConfig(AUTH_HASH_CONFIG).algorithm });
+  await markPhase(state, 'auth', { sha256: sha256File(AUTH_FILE), accountCount: verified.envelope.accountCount, hashedPasswordCount: verified.envelope.hashedPasswordCount, hashAlgorithm: normalizedHashConfig(AUTH_HASH_CONFIG).algorithm });
 }
 
 function copyFilePreserve(src, dest) { fs.mkdirSync(path.dirname(dest), { recursive: true }); fs.copyFileSync(src, dest); }
@@ -371,7 +467,7 @@ async function phaseHosting(state) {
   copyHostingTree(SOURCE_APP_DIR, HOSTING_DIR); copyAppConfig();
   const hosting = hashTree(HOSTING_DIR), appConfig = hashTree(APP_CONFIG_DIR);
   writeJsonAtomic(path.join(PAYLOAD_DIR, 'hosting-manifest.json'), { format: 'riflessa-hosting-snapshot-v1', sourceCommit: SOURCE_COMMIT, fileCount: hosting.fileCount, sha256: hosting.sha256, files: hosting.files });
-  markPhase(state, 'hosting', { hostingSha256: hosting.sha256, hostingFileCount: hosting.fileCount, appConfigSha256: appConfig.sha256, appConfigFileCount: appConfig.fileCount });
+  await markPhase(state, 'hosting', { hostingSha256: hosting.sha256, hostingFileCount: hosting.fileCount, appConfigSha256: appConfig.sha256, appConfigFileCount: appConfig.fileCount });
 }
 
 async function phaseLogs(state) {
@@ -381,15 +477,14 @@ async function phaseLogs(state) {
   const changeInfo = readJson(LOG_CHANGES_FILE);
   let documents = new Map(), mode = changeInfo.mode, changedDocuments = 0, deletedDocuments = 0;
   if (mode === 'incremental') {
-    try {
-      const previous = readPreviousMaps(await previousPayloadRoot());
-      if (!previous) throw new Error('Base precedente non disponibile');
+    const previous = await loadPreviousBaseOrNull('Log incrementali');
+    if (!previous) {
+      console.warn('Base log precedente incompatibile: e consentito il fallback full dei soli log.');
+      mode = 'full';
+    } else {
       documents = new Map(previous.logs);
       const applied = await applyChangedPaths(documents, Array.isArray(changeInfo.paths) ? changeInfo.paths : []);
       changedDocuments = applied.changedDocuments; deletedDocuments = applied.deletedDocuments;
-    } catch (error) {
-      console.warn(`Log incrementali non utilizzabili: ${error.message || error}. Esporto tutti i log.`);
-      mode = 'full';
     }
   }
   if (mode === 'full') {
@@ -399,7 +494,7 @@ async function phaseLogs(state) {
   }
   const manifest = writeSnapshot(documents, LOG_DIR, 'riflessa-firestore-logs-jsonl-v3');
   const tree = hashTree(LOG_DIR);
-  markPhase(state, 'logs', { sha256: tree.sha256, documentCount: manifest.documentCount, mode, changedDocuments, deletedDocuments });
+  await markPhase(state, 'logs', { sha256: tree.sha256, documentCount: manifest.documentCount, mode, changedDocuments, deletedDocuments });
 }
 
 function countSnapshotDocs(dir) { return readSnapshot(dir).documents.size; }
@@ -418,11 +513,7 @@ function verifyPayload(root) {
   }
   return { manifest, coreCount, logCount, authCount: auth.payload.users.length, hostingFiles: hosting.fileCount };
 }
-async function encryptFile(input, output) {
-  const key = deriveKey('riflessa-full-backup-v3'), iv = crypto.randomBytes(12), cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
-  await pipeline(fs.createReadStream(input), cipher, fs.createWriteStream(output));
-  return { iv: iv.toString('base64'), authTag: cipher.getAuthTag().toString('base64'), plainSha256: sha256File(input), cipherSha256: sha256File(output), bytes: fs.statSync(output).size };
-}
+async function encryptFile(input, output) { return encryptFileWithDomain(input, output, 'riflessa-full-backup-v3'); }
 async function decryptFinalForVerification(publicManifest, destination) {
   removeAndCreate(destination);
   const encrypted = path.join(FINAL_DIR, publicManifest.archive.file);
@@ -464,7 +555,7 @@ async function finalize(state) {
     'Backup registratore cifrato v3', `Data UTC: ${createdAt}`, `Progetto: ${PROJECT_ID}`, `Commit applicazione: ${SOURCE_COMMIT || '-'}`,
     `Modalita Firestore: ${payloadManifest.backupMode}`, `Base precedente: ${PREVIOUS_BACKUP_NAME || 'nessuna'}`,
     `Firestore core: ${core.documentCount}`, `Log: ${logs.documentCount}`, `Auth: ${auth.accountCount}`, `Hosting: ${hosting.fileCount} file`,
-    `Tentativo riuscito: ${ATTEMPT}/4`, 'Il repository conserva solo l\'archivio finale cifrato; il checkpoint temporaneo viene eliminato solo dopo verifica e push riuscito.'
+    `Tentativo riuscito: ${ATTEMPT}/4`, 'Checkpoint di fase cifrati persistenti nel repository privato fino al push del backup definitivo.'
   ].join('\n') + '\n');
   verifyPayload(PAYLOAD_DIR);
 
@@ -486,6 +577,7 @@ async function finalize(state) {
 }
 
 async function main() {
+  await restorePersistentCheckpoint();
   const state = initializeState();
   await phaseFirestore(state);
   await phaseAuth(state);
