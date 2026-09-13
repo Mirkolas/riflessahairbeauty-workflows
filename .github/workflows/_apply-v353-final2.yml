@@ -52,7 +52,7 @@ jobs:
         working-directory: source/${{ env.APP_DIR }}
         run: npm run check
 
-      - name: Pubblica via GitHub API
+      - name: Pubblica via Git Data API atomica
         env:
           SOURCE_PAT: ${{ env.SOURCE_PAT }}
         run: python workflows/scripts/publish-v353.py source "${SOURCE_REPOSITORY}" main
