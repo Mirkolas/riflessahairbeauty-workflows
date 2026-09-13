@@ -17,6 +17,8 @@ const AUTH_HASH_CONFIG = process.env.AUTH_HASH_CONFIG;
 const ATTEMPT = Number(process.env.ATTEMPT || 1);
 const BACKUP_REPO_DIR = process.env.BACKUP_REPO_DIR || process.cwd();
 const PERSISTENT_CHECKPOINT_DIR = process.env.PERSISTENT_CHECKPOINT_DIR || '';
+const TEST_STOP_AFTER_PHASE = String(process.env.TEST_STOP_AFTER_PHASE || '').trim();
+const ALLOW_TEST_FAILPOINTS = String(process.env.ALLOW_TEST_FAILPOINTS || '') === '1';
 const JOURNAL_COLLECTION = '_backupChanges';
 const LOG_ROOT = 'registratoreLogFiles';
 const PART_LIMIT = 15 * 1024 * 1024;
@@ -578,13 +580,23 @@ async function finalize(state) {
   console.log(`Backup finale cifrato, riletto e verificato: ${verified.coreCount} core + ${verified.logCount} log, ${verified.authCount} account, ${verified.hostingFiles} file Hosting.`);
 }
 
+function testStopAfter(phaseName) {
+  if (!TEST_STOP_AFTER_PHASE) return;
+  if (!ALLOW_TEST_FAILPOINTS) throw new Error('TEST_STOP_AFTER_PHASE richiede ALLOW_TEST_FAILPOINTS=1');
+  if (TEST_STOP_AFTER_PHASE === phaseName) {
+    const error = new Error(`TEST_FAILPOINT_AFTER_${phaseName.toUpperCase()}: arresto intenzionale dopo checkpoint persistito`);
+    error.code = 'RIFLESSA_TEST_FAILPOINT';
+    throw error;
+  }
+}
+
 async function main() {
   await restorePersistentCheckpoint();
   const state = initializeState();
-  await phaseFirestore(state);
-  await phaseAuth(state);
-  await phaseHosting(state);
-  await phaseLogs(state);
+  await phaseFirestore(state); testStopAfter('firestore');
+  await phaseAuth(state); testStopAfter('auth');
+  await phaseHosting(state); testStopAfter('hosting');
+  await phaseLogs(state); testStopAfter('logs');
   await finalize(state);
 }
 main().catch(error => { console.error(error); process.exit(1); });
