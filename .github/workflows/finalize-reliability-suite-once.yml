@@ -1,0 +1,163 @@
+name: Finalizza affidabilita registratore una tantum
+
+on:
+  push:
+    paths:
+      - '.github/workflows/finalize-reliability-suite-once.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: Mirkolas/riflessahairbeauty
+          ref: main
+          token: ${{ secrets.PUBLIC_REPO_TOKEN }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Ripulisce dipendenze e completa audit/idempotenza resi
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP='riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions'
+          rm -rf "$APP/node_modules"
+          cat > "$APP/.gitignore" <<'EOF'
+          node_modules/
+          dist/
+          *.log
+          EOF
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          root=Path('riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions')
+          p=root/'js/final-safety.js'; s=p.read_text()
+          def rep(old,new,label):
+              global s
+              n=s.count(old)
+              if n!=1: raise SystemExit(f'{label}: atteso 1 match, trovati {n}')
+              s=s.replace(old,new,1)
+          rep("async function markReturnUncertain(returnId,rt){\n  await retryManagement(()=>updateDoc(doc(db,'returns',returnId),{\n    status:'fiscal_uncertain',fiscalResult:JSON.stringify(rt||{}).slice(0,15000),fiscalAttemptedAt:serverTimestamp(),rtReference:rt?.fiscalReference?`Z ${rt.fiscalReference.zno} / Doc ${rt.fiscalReference.docno}`:''\n  }));\n}\n",
+              "async function markReturnUncertain(returnId,rt){\n  const ref=doc(db,'returns',returnId);\n  await retryManagement(()=>updateDoc(ref,{\n    status:'fiscal_uncertain',fiscalResult:JSON.stringify(rt||{}).slice(0,15000),fiscalAttemptedAt:serverTimestamp(),rtReference:rt?.fiscalReference?`Z ${rt.fiscalReference.zno} / Doc ${rt.fiscalReference.docno}`:''\n  }));\n  try{const snap=await getDoc(ref);if(snap.exists())await auditFiscal('sale',snap.data().saleId,'return.uncertain',{returnId,code:rt?.code||'',message:rt?.message||''});}catch{}\n}\nasync function auditReturnEvent(returnId,event,data={}){\n  try{const snap=await getDoc(doc(db,'returns',returnId));if(snap.exists())await auditFiscal('sale',snap.data().saleId,event,{returnId,...data});}catch(e){console.warn('audit reso',event,e);}\n}\n",'audit helper return')
+          rep("      try{await finalizeReturnManagement(returnId,{rtReference:label,fiscalResult:JSON.stringify(rt)});notify('Documento fiscale e gestione completati','success');}\n",
+              "      try{await finalizeReturnManagement(returnId,{rtReference:label,fiscalResult:JSON.stringify(rt)});await auditReturnEvent(returnId,'return.completed',{reference:label,manual:false});notify('Documento fiscale e gestione completati','success');}\n",'audit execute return complete')
+          rep("      await updateDoc(ref,{fiscalResult:JSON.stringify(rt||{}).slice(0,15000),fiscalAttemptedAt:serverTimestamp()});\n      notify(rt?.message||'Operazione RT non avviata; resta da eseguire.','error',7000);\n",
+              "      await updateDoc(ref,{fiscalResult:JSON.stringify(rt||{}).slice(0,15000),fiscalAttemptedAt:serverTimestamp()});\n      await auditReturnEvent(returnId,'return.not_started',{code:rt?.code||'',message:rt?.message||''});\n      notify(rt?.message||'Operazione RT non avviata; resta da eseguire.','error',7000);\n",'audit execute return not started')
+          rep("    if(!printed){await finalizeReturnManagement(returnRef.id,{manual:true});notify('Operazione gestionale completata','success');return;}\n",
+              "    if(!printed){await finalizeReturnManagement(returnRef.id,{manual:true});await auditReturnEvent(returnRef.id,'return.completed',{manual:true,fiscalRequired:false});notify('Operazione gestionale completata','success');return;}\n",'audit management return')
+          rep("      try{await finalizeReturnManagement(returnRef.id,{rtReference:label,fiscalResult:JSON.stringify(rt)});notify(`${type==='void'?'Annullo':'Reso'} fiscale completato`,'success');}\n",
+              "      try{await finalizeReturnManagement(returnRef.id,{rtReference:label,fiscalResult:JSON.stringify(rt)});await auditReturnEvent(returnRef.id,'return.completed',{reference:label,manual:false,type});notify(`${type==='void'?'Annullo':'Reso'} fiscale completato`,'success');}\n",'audit immediate return complete')
+          rep("      await updateDoc(returnRef,{fiscalResult:JSON.stringify(rt||{}).slice(0,15000),fiscalAttemptedAt:serverTimestamp()});\n      notify(rt?.message||'Operazione fiscale non avviata: resta da eseguire dalla sezione Resi e annulli.','error',8000);\n",
+              "      await updateDoc(returnRef,{fiscalResult:JSON.stringify(rt||{}).slice(0,15000),fiscalAttemptedAt:serverTimestamp()});\n      await auditReturnEvent(returnRef.id,'return.not_started',{code:rt?.code||'',message:rt?.message||''});\n      notify(rt?.message||'Operazione fiscale non avviata: resta da eseguire dalla sezione Resi e annulli.','error',8000);\n",'audit immediate not started')
+          rep("      await updateDoc(ref,{status:'fiscal_pending',rtReference:'',fiscalAttemptedAt:serverTimestamp()});notify('Operazione rimessa in attesa.','success');\n",
+              "      await updateDoc(ref,{status:'fiscal_pending',rtReference:'',fiscalAttemptedAt:serverTimestamp()});\n      try{await window.axonPrinter?.resolveIdempotency?.({key:`afterSale:${returnId}`,resolution:'not_emitted'});}catch{}\n      await auditReturnEvent(returnId,'return.manual_verified_not_emitted',{});\n      notify('Operazione rimessa in attesa.','success');\n",'manual return not emitted')
+          rep("  try{await finalizeReturnManagement(returnId,{rtReference:reference.trim(),fiscalResult:r.fiscalResult||'',manual:true});notify('Operazione verificata e gestione riallineata','success');}\n",
+              "  try{await finalizeReturnManagement(returnId,{rtReference:reference.trim(),fiscalResult:r.fiscalResult||'',manual:true});try{await window.axonPrinter?.resolveIdempotency?.({key:`afterSale:${returnId}`,resolution:'emitted',result:{ok:true,manualVerification:true}});}catch{}await auditReturnEvent(returnId,'return.manual_verified_emitted',{reference:reference.trim()});notify('Operazione verificata e gestione riallineata','success');}\n",'manual return emitted')
+          p.write_text(s)
+
+          # Rimuove il pretest temporaneo e prepara versione 3.5.6.
+          for name in ['package.json','package-lock.json']:
+              p=root/name; data=json.loads(p.read_text())
+              data['version']='3.5.6'
+              if name=='package.json':
+                  data.get('scripts',{}).pop('pretest',None)
+              else:
+                  if '' in data.get('packages',{}): data['packages']['']['version']='3.5.6'
+              p.write_text(json.dumps(data,ensure_ascii=False,indent=2)+'\n')
+
+          # Rimuove import inutilizzato.
+          p=root/'electron/main.js'; s=p.read_text(); s=s.replace("const { FiscalIdempotencyStore, payloadHash } = require('./axon/fiscal-idempotency');","const { FiscalIdempotencyStore } = require('./axon/fiscal-idempotency');")
+          p.write_text(s)
+          PY
+          cat > "$APP/VERSIONE_3_5_6_AFFIDABILITA.txt" <<'EOF'
+          Riflessabeautyapp 3.5.6 - hardening affidabilita
+          - anti-duplicazione fiscale persistente
+          - recovery crash tra gestionale e RT
+          - controllo coerenza prima della Z
+          - audit fiscale vendite/resi/annulli
+          - pannello Stato sistema
+          - preflight rilascio con backup recente
+          - test automatici ciclo vendita/resi/Z e crash recovery
+          EOF
+          node --check "$APP/electron/main.js"
+          node --check "$APP/electron/preload.js"
+          node --check "$APP/electron/axon/fiscal-idempotency.js"
+          git diff --check
+      - name: Test completi senza vendorizzare node_modules
+        working-directory: riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
+        run: |
+          set -euo pipefail
+          npm ci --omit=dev --ignore-scripts --no-audit --no-fund
+          npm test
+          node scripts/release-preflight.cjs
+          rm -rf node_modules
+      - name: Commit finale app
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A -- riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
+          git commit -m 'Finalizza affidabilita fiscale registratore 3.5.6'
+          git push origin HEAD:main
+
+  deploy-rules:
+    needs: finalize
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID }}
+      GOOGLE_CREDENTIALS_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: Mirkolas/riflessahairbeauty
+          ref: main
+          token: ${{ secrets.PUBLIC_REPO_TOKEN }}
+          path: apprepo
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Deploy sole regole Firestore
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "$PROJECT_ID" ]] || { echo '::error::FIREBASE_PROJECT_ID mancante'; exit 1; }
+          [[ -n "$GOOGLE_CREDENTIALS_JSON" ]] || { echo '::error::FIREBASE_SERVICE_ACCOUNT mancante'; exit 1; }
+          TOOL="$RUNNER_TEMP/firebase-cli"
+          npm install --prefix "$TOOL" firebase-tools --no-audit --no-fund >/dev/null
+          CRED="$RUNNER_TEMP/firebase-sa.json"
+          printf '%s' "$GOOGLE_CREDENTIALS_JSON" > "$CRED"
+          chmod 600 "$CRED"
+          cd apprepo/riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
+          GOOGLE_APPLICATION_CREDENTIALS="$CRED" "$TOOL/node_modules/.bin/firebase" deploy --only firestore:rules --project "$PROJECT_ID" --config firebase.json --non-interactive
+          rm -f "$CRED"
+
+  build-windows:
+    needs: finalize
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: Mirkolas/riflessahairbeauty
+          ref: main
+          token: ${{ secrets.PUBLIC_REPO_TOKEN }}
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Test e build Windows 3.5.6
+        shell: pwsh
+        working-directory: riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
+        run: |
+          npm ci --no-audit --no-fund
+          npm test
+          npm run check
+          npm run dist
