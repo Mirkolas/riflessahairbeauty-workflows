@@ -1,0 +1,118 @@
+name: Finalizza diagnostica developer only 3.5.9 v2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/finalize-diagnostics-359-once-v2.yml'
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout strumenti workflow
+        uses: actions/checkout@v4
+        with:
+          path: workflow-tools
+
+      - name: Checkout sorgente privato
+        uses: actions/checkout@v4
+        with:
+          repository: Mirkolas/riflessahairbeauty
+          ref: main
+          token: ${{ secrets.PUBLIC_REPO_TOKEN }}
+          fetch-depth: 0
+          path: source
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Patch e test 3.5.9
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_DIR="$GITHUB_WORKSPACE/source/riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions"
+          node "$GITHUB_WORKSPACE/workflow-tools/.github/scripts/finalize-diagnostics-359.cjs" "$APP_DIR"
+          cd "$APP_DIR"
+          npm ci --no-audit --no-fund
+          npm version 3.5.9 --no-git-tag-version
+          sed -i 's/3\.5\.8/3.5.9/g' scripts/check-project.js tests/auto-update.test.js
+          node --check electron/main.js
+          node --check electron/auto-updater.js
+          npm test
+          npm run check
+          git diff --check
+
+      - name: Commit sorgente
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/source"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
+          git commit -m 'Aggiunge diagnostica developer only registratore 3.5.9'
+          git push origin HEAD:main
+
+      - name: Installa Admin SDK
+        shell: bash
+        run: npm install firebase-admin@13 --no-save --no-audit --no-fund
+
+      - name: Assegna unico accesso developer
+        shell: bash
+        env:
+          GOOGLE_CREDENTIALS_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID }}
+        run: |
+          node - <<'NODE'
+          const admin=require('firebase-admin');
+          const sa=JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON);
+          admin.initializeApp({credential:admin.credential.cert(sa),projectId:process.env.PROJECT_ID});
+          (async()=>{
+            const db=admin.firestore();
+            const snap=await db.collection('users').where('role','==','admin').get();
+            if(snap.size!==1) throw new Error('Numero admin diverso da 1: accesso developer non assegnato');
+            const uid=snap.docs[0].id;
+            await db.collection('developerAccess').doc(uid).set({enabled:true,createdAt:admin.firestore.FieldValue.serverTimestamp(),source:'diagnostics-3.5.9'});
+            console.log('Accesso developer assegnato a un solo account');
+          })().catch(e=>{console.error(e);process.exit(1)});
+          NODE
+
+      - name: Deploy rules developer only
+        shell: bash
+        env:
+          GOOGLE_CREDENTIALS_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID }}
+        run: |
+          node - <<'NODE'
+          const fs=require('fs'),admin=require('firebase-admin');
+          const sa=JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON);
+          if(!admin.apps.length) admin.initializeApp({credential:admin.credential.cert(sa),projectId:process.env.PROJECT_ID});
+          const p=process.env.GITHUB_WORKSPACE+'/source/riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions/firestore.rules';
+          admin.securityRules().releaseFirestoreRulesetFromSource(fs.readFileSync(p,'utf8')).then(()=>console.log('Rules pubblicate')).catch(e=>{console.error(e);process.exit(1)});
+          NODE
+
+      - name: Deploy monitor hosting
+        shell: bash
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          export GOOGLE_APPLICATION_CREDENTIALS="$RUNNER_TEMP/firebase-sa.json"
+          printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > "$GOOGLE_APPLICATION_CREDENTIALS"
+          npm install -g firebase-tools@13
+          cd "$GITHUB_WORKSPACE/source/riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions"
+          firebase deploy --only hosting:registratore --project "$PROJECT_ID" --non-interactive
+
+      - name: Avvia release permanente
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run release-auto-update-registratore.yml --repo "$GITHUB_REPOSITORY"
