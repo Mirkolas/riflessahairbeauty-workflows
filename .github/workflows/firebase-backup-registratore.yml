@@ -24,7 +24,7 @@ env:
 
 jobs:
   backup:
-    name: Backup completo registratore
+    name: Backup registratore
     runs-on: ubuntu-latest
     timeout-minutes: 120
 
@@ -95,7 +95,7 @@ jobs:
           mkdir -p "${RUNNER_TEMP}/registratore-backup-tool"
           npm install --prefix "${RUNNER_TEMP}/registratore-backup-tool" firebase-admin@13 --no-audit --no-fund >/dev/null
 
-      - name: Crea backup completo con massimo 5 tentativi
+      - name: Crea backup con massimo 5 tentativi
         if: steps.schedule_gate.outputs.run == 'true'
         id: backup
         working-directory: backup-repo
@@ -109,14 +109,26 @@ jobs:
 
           SUCCESS=0
           FINAL_BACKUP=""
+          FINAL_MODE=""
           APP_DIR="riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions"
           EXPORTER="${GITHUB_WORKSPACE}/workflow-src/scripts/backup-registratore.cjs"
 
           for ATTEMPT in 1 2 3 4 5; do
-            echo "Tentativo backup completo ${ATTEMPT}/5"
+            echo "Tentativo backup ${ATTEMPT}/5"
             git fetch origin main
             git reset --hard origin/main
             git clean -fd -- backup-registratore
+
+            PREVIOUS_BACKUP_DIR="$(find backup-registratore -mindepth 1 -maxdepth 1 -type d -name 'backup-*' | sort | tail -n 1)"
+            PREVIOUS_BACKUP_NAME=""
+            PREVIOUS_BACKUP_ABS=""
+            if [[ -n "${PREVIOUS_BACKUP_DIR}" ]]; then
+              PREVIOUS_BACKUP_NAME="$(basename "${PREVIOUS_BACKUP_DIR}")"
+              PREVIOUS_BACKUP_ABS="${PWD}/${PREVIOUS_BACKUP_DIR}"
+              echo "Base precedente: ${PREVIOUS_BACKUP_NAME}"
+            else
+              echo "Nessuna base precedente: il backup sara completo."
+            fi
 
             SOURCE_COMMIT="$(git rev-parse HEAD)"
             TIMESTAMP="$(date -u +'%Y%m%d-%H%M%S')"
@@ -124,7 +136,12 @@ jobs:
             LOCAL_DIR="backup-registratore/${BACKUP_NAME}"
             mkdir -p "${LOCAL_DIR}/app-config/config" "${LOCAL_DIR}/app-config/js"
 
-            if OUTPUT_DIR="${PWD}/${LOCAL_DIR}" SOURCE_COMMIT="${SOURCE_COMMIT}" node "${EXPORTER}"; then
+            if OUTPUT_DIR="${PWD}/${LOCAL_DIR}" \
+              SOURCE_COMMIT="${SOURCE_COMMIT}" \
+              PREVIOUS_BACKUP_DIR="${PREVIOUS_BACKUP_ABS}" \
+              PREVIOUS_BACKUP_NAME="${PREVIOUS_BACKUP_NAME}" \
+              node "${EXPORTER}"; then
+
               cp "${APP_DIR}/.firebaserc" "${LOCAL_DIR}/app-config/.firebaserc"
               cp "${APP_DIR}/firebase.json" "${LOCAL_DIR}/app-config/firebase.json"
               cp "${APP_DIR}/firestore.rules" "${LOCAL_DIR}/app-config/firestore.rules"
@@ -133,34 +150,44 @@ jobs:
               cp "${APP_DIR}/js/firebase-config.js" "${LOCAL_DIR}/app-config/js/firebase-config.js"
               printf '%s\n' "${SOURCE_COMMIT}" > "${LOCAL_DIR}/SOURCE_COMMIT.txt"
 
-              if node -e "const m=require('./${LOCAL_DIR}/manifest.json'); if(m.format!=='riflessa-registratore-backup-v2'||m.firestore?.documentCount===undefined||m.authentication?.accountCount===undefined) process.exit(1); console.log('Manifest backup verificato.');" \
+              if node -e "const m=require('./${LOCAL_DIR}/manifest.json'); if(m.format!=='riflessa-registratore-backup-v2'||m.firestore?.documentCount===undefined||!m.firestore?.journalCursor||m.authentication?.accountCount===undefined) process.exit(1); console.log('Manifest backup verificato:',m.firestore.backupMode);" \
                 && node -e "const a=require('./${LOCAL_DIR}/authentication.enc.json'); if(a.format!=='riflessa-firebase-auth-aes256gcm-v1'||!a.ciphertext||!a.authTag) process.exit(1); console.log('Authentication cifrata verificata.');" \
                 && test -f "${LOCAL_DIR}/firestore/manifest.json"; then
 
+                BACKUP_MODE="$(node -p "require('./${LOCAL_DIR}/manifest.json').firestore.backupMode || 'full'")"
+                JOURNAL_READS="$(node -p "require('./${LOCAL_DIR}/manifest.json').firestore.journalDocumentsRead || 0")"
+                CHANGED_PATHS="$(node -p "require('./${LOCAL_DIR}/manifest.json').firestore.changedPaths || 0")"
+
                 cat > "${LOCAL_DIR}/BACKUP_INFO.txt" <<EOF
-          Backup completo registratore
+          Backup registratore
           Data UTC: ${TIMESTAMP}
           Progetto: ${PROJECT_ID}
           Commit applicazione: ${SOURCE_COMMIT}
-          Contenuto: Firestore completo, Authentication cifrata con hash password, log registratore sincronizzati, configurazione applicazione.
+          Modalita Firestore: ${BACKUP_MODE}
+          Base precedente: ${PREVIOUS_BACKUP_NAME:-nessuna}
+          Record journal letti: ${JOURNAL_READS}
+          Documenti/path modificati verificati: ${CHANGED_PATHS}
+          Contenuto finale: snapshot Firestore completo e autonomo, Authentication cifrata con hash password, log registratore sincronizzati, configurazione applicazione.
           Tentativo riuscito: ${ATTEMPT}/5
           EOF
 
                 mapfile -t BACKUPS < <(find backup-registratore -mindepth 1 -maxdepth 1 -type d -name 'backup-*' | sort)
                 COUNT="${#BACKUPS[@]}"
-                if (( COUNT >= 5 )); then
-                  echo "Soglia 5 raggiunta: mantengo solo ${BACKUP_NAME}."
-                  for DIR in "${BACKUPS[@]}"; do
-                    [[ "${DIR}" == "${LOCAL_DIR}" ]] || rm -rf -- "${DIR}"
+                if (( COUNT > 5 )); then
+                  REMOVE_COUNT=$((COUNT - 5))
+                  echo "Retention: mantengo gli ultimi 5 backup e rimuovo ${REMOVE_COUNT} backup piu vecchi."
+                  for ((I=0; I<REMOVE_COUNT; I++)); do
+                    rm -rf -- "${BACKUPS[$I]}"
                   done
                 fi
 
                 git add backup-registratore
-                git commit -m "Backup completo registratore ${TIMESTAMP} (tentativo ${ATTEMPT})"
+                git commit -m "Backup registratore ${TIMESTAMP} (${BACKUP_MODE}, tentativo ${ATTEMPT})"
                 if git push origin HEAD:main; then
                   SUCCESS=1
                   FINAL_BACKUP="${BACKUP_NAME}"
-                  echo "Backup completo creato: backup-registratore/${BACKUP_NAME}"
+                  FINAL_MODE="${BACKUP_MODE}"
+                  echo "Backup creato: backup-registratore/${BACKUP_NAME} (${BACKUP_MODE})"
                   break
                 fi
               fi
@@ -173,15 +200,17 @@ jobs:
           done
 
           if (( SUCCESS != 1 )); then
-            echo "::error::Backup completo non creato dopo 5 tentativi."
+            echo "::error::Backup non creato dopo 5 tentativi."
             exit 1
           fi
 
           echo "backup_name=${FINAL_BACKUP}" >> "${GITHUB_OUTPUT}"
+          echo "backup_mode=${FINAL_MODE}" >> "${GITHUB_OUTPUT}"
 
       - name: Riepilogo
         if: steps.schedule_gate.outputs.run == 'true'
         shell: bash
         run: |
-          echo "Backup completo registratore riuscito."
+          echo "Backup registratore riuscito."
+          echo "Modalita: ${{ steps.backup.outputs.backup_mode }}"
           echo "Percorso: backup-registratore/${{ steps.backup.outputs.backup_name }}"
