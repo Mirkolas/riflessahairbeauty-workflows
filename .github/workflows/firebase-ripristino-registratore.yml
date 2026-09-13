@@ -8,14 +8,22 @@ on:
         required: false
         default: ""
         type: string
+      firestore_mode:
+        description: "Firestore: exact riporta i dati esattamente al backup; merge mantiene documenti extra presenti oggi"
+        required: true
+        default: "exact"
+        type: choice
+        options:
+          - exact
+          - merge
       auth_mode:
         description: "Authentication: merge aggiorna/esporta mancanti; replace cancella gli account correnti e ripristina esattamente il backup"
         required: true
-        default: "merge"
+        default: "replace"
         type: choice
         options:
-          - merge
           - replace
+          - merge
       conferma:
         description: "Scrivi RIPRISTINA per confermare"
         required: true
@@ -122,14 +130,16 @@ jobs:
           set -euo pipefail
           BACKUP_PATH="${{ steps.backup.outputs.path }}" node "${GITHUB_WORKSPACE}/workflow-src/scripts/verifica-backup-registratore.cjs"
 
-      - name: Ripristina Firestore e Authentication
+      - name: Ripristina e rileggi Firestore e Authentication
         working-directory: backup-repo
         shell: bash
         env:
           NODE_PATH: ${{ runner.temp }}/registratore-restore-tool/node_modules
           BACKUP_PATH: ${{ steps.backup.outputs.path }}
           BACKUP_FORMAT: ${{ steps.backup.outputs.format }}
+          FIRESTORE_MODE: ${{ inputs.firestore_mode }}
           AUTH_MODE: ${{ inputs.auth_mode }}
+          VERIFY_RESTORE: "1"
         run: |
           set -euo pipefail
           node "${GITHUB_WORKSPACE}/workflow-src/scripts/ripristino-registratore.cjs"
@@ -137,6 +147,8 @@ jobs:
       - name: Riepilogo
         shell: bash
         run: |
-          echo "Ripristino completato dal backup ${{ steps.backup.outputs.name }}."
+          echo "Ripristino completato e riletto dal backup ${{ steps.backup.outputs.name }}."
           echo "Formato: ${{ steps.backup.outputs.format }}"
+          echo "Firestore: ${{ inputs.firestore_mode }}"
           echo "Authentication: ${{ inputs.auth_mode }}"
+          echo "Nota: _backupChanges e escluso dal restore exact perche e infrastruttura del backup incrementale."
