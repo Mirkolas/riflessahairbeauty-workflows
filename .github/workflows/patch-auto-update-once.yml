@@ -1,0 +1,232 @@
+name: Patch auto update registratore una tantum
+
+on:
+  push:
+    paths:
+      - '.github/workflows/patch-auto-update-once.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: Mirkolas/riflessahairbeauty
+          ref: main
+          token: ${{ secrets.PUBLIC_REPO_TOKEN }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Applica auto update sicuro 3.5.7
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP='riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions'
+          cd "$APP"
+          npm install electron-updater@6.8.9 --save --no-audit --no-fund
+          npm install electron-builder@26.15.3 --save-dev --no-audit --no-fund
+          npm version 3.5.7 --no-git-tag-version
+
+          node <<'NODE'
+          const fs=require('fs');
+          const p=JSON.parse(fs.readFileSync('package.json','utf8'));
+          p.build.publish={provider:'github',owner:'Mirkolas',repo:'riflessahairbeauty-workflows',vPrefixedTagName:false,releaseType:'release'};
+          p.build.nsis={...(p.build.nsis||{}),oneClick:false,perMachine:false,allowElevation:true,allowToChangeInstallationDirectory:true,createDesktopShortcut:true,createStartMenuShortcut:true,shortcutName:'Riflessabeautyapp'};
+          fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n');
+          NODE
+
+          cat > electron/auto-updater.js <<'NODE'
+          const { dialog } = require('electron');
+          const { autoUpdater } = require('electron-updater');
+
+          function cleanMessage(value) {
+            return String(value || '').replace(/\s+/g, ' ').trim().slice(0, 500);
+          }
+
+          function setupRiflessaAutoUpdater({ app, getMainWindow, getSafetyState, log = console }) {
+            const supported = app.isPackaged && process.platform === 'win32';
+            let downloadedInfo = null;
+            let promptTimer = null;
+            let checking = false;
+
+            const write = (event, data = {}) => {
+              try { log(event, data); } catch {}
+            };
+
+            async function safety() {
+              try {
+                const result = await getSafetyState();
+                return result && typeof result === 'object' ? result : { safe:false, reasons:['Stato sicurezza non disponibile'] };
+              } catch (error) {
+                return { safe:false, reasons:[`Controllo sicurezza non riuscito: ${cleanMessage(error?.message || error)}`] };
+              }
+            }
+
+            async function promptInstall() {
+              if (!downloadedInfo) return;
+              const win = getMainWindow();
+              if (!win || win.isDestroyed()) return;
+              const status = await safety();
+              if (!status.safe) {
+                write('update.install.blocked', { version: downloadedInfo.version, reasons: status.reasons });
+                await dialog.showMessageBox(win, {
+                  type:'warning',
+                  title:'Aggiornamento pronto ma non installabile',
+                  message:`Riflessabeautyapp ${downloadedInfo.version} è stato scaricato, ma l'installazione è bloccata per sicurezza.`,
+                  detail:(status.reasons || []).join('\n') || 'Completa prima le operazioni fiscali aperte.',
+                  buttons:['OK']
+                });
+                schedulePrompt(30 * 60 * 1000);
+                return;
+              }
+              const answer = await dialog.showMessageBox(win, {
+                type:'info',
+                title:'Aggiornamento Riflessabeautyapp',
+                message:`È pronto l'aggiornamento ${downloadedInfo.version}.`,
+                detail:'L’app verrà chiusa, aggiornata e riavviata. Nessuna operazione fiscale risulta pendente.',
+                buttons:['Installa e riavvia','Più tardi'],
+                defaultId:0,
+                cancelId:1,
+                noLink:true
+              });
+              if (answer.response !== 0) {
+                write('update.install.deferred', { version: downloadedInfo.version });
+                schedulePrompt(30 * 60 * 1000);
+                return;
+              }
+              const finalStatus = await safety();
+              if (!finalStatus.safe) {
+                write('update.install.blocked.final', { version: downloadedInfo.version, reasons: finalStatus.reasons });
+                await dialog.showMessageBox(win, { type:'warning', title:'Aggiornamento rinviato', message:'Nel frattempo è iniziata un’operazione fiscale. L’aggiornamento non verrà installato.', detail:(finalStatus.reasons || []).join('\n'), buttons:['OK'] });
+                schedulePrompt(30 * 60 * 1000);
+                return;
+              }
+              write('update.install.start', { version: downloadedInfo.version });
+              setImmediate(() => autoUpdater.quitAndInstall(false, true));
+            }
+
+            function schedulePrompt(delay) {
+              if (promptTimer) clearTimeout(promptTimer);
+              promptTimer = setTimeout(() => { promptInstall().catch(error => write('update.prompt.error',{message:cleanMessage(error?.message||error)})); }, delay);
+              promptTimer.unref?.();
+            }
+
+            async function check() {
+              if (!supported || checking) return;
+              checking = true;
+              try {
+                write('update.check.start', { currentVersion: app.getVersion() });
+                await autoUpdater.checkForUpdates();
+              } catch (error) {
+                write('update.check.error', { message:cleanMessage(error?.message || error) });
+              } finally {
+                checking = false;
+              }
+            }
+
+            if (!supported) {
+              write('update.disabled', { packaged:app.isPackaged, platform:process.platform });
+              return { check };
+            }
+
+            autoUpdater.autoDownload = false;
+            autoUpdater.autoInstallOnAppQuit = false;
+            autoUpdater.allowPrerelease = false;
+            autoUpdater.allowDowngrade = false;
+            if ('disableWebInstaller' in autoUpdater) autoUpdater.disableWebInstaller = true;
+
+            autoUpdater.on('checking-for-update', () => write('update.checking'));
+            autoUpdater.on('update-not-available', info => write('update.none', { version:info?.version || app.getVersion() }));
+            autoUpdater.on('update-available', async info => {
+              write('update.available', { version:info?.version });
+              try {
+                const status = await safety();
+                if (!status.safe) {
+                  write('update.download.deferred', { version:info?.version, reasons:status.reasons });
+                  return;
+                }
+                await autoUpdater.downloadUpdate();
+              } catch (error) {
+                write('update.download.error', { message:cleanMessage(error?.message || error) });
+              }
+            });
+            autoUpdater.on('download-progress', progress => write('update.download.progress', { percent:Math.round(Number(progress?.percent || 0)) }));
+            autoUpdater.on('update-downloaded', info => {
+              downloadedInfo = { version:info?.version || '', releaseName:info?.releaseName || '' };
+              write('update.downloaded', downloadedInfo);
+              schedulePrompt(500);
+            });
+            autoUpdater.on('error', error => write('update.error', { message:cleanMessage(error?.message || error) }));
+
+            const first = setTimeout(check, 60 * 1000);
+            first.unref?.();
+            const periodic = setInterval(check, 6 * 60 * 60 * 1000);
+            periodic.unref?.();
+            return { check };
+          }
+
+          module.exports = { setupRiflessaAutoUpdater };
+          NODE
+
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('electron/main.js'); s=p.read_text()
+          old="const { FiscalIdempotencyStore } = require('./axon/fiscal-idempotency');\n"
+          new=old+"const { setupRiflessaAutoUpdater } = require('./auto-updater');\n"
+          if s.count(old)!=1: raise SystemExit('main require patch non univoca')
+          s=s.replace(old,new,1)
+          old2="  createSplashWindow();\n  createWindow();\n  app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });\n"
+          new2="  createSplashWindow();\n  createWindow();\n  setupRiflessaAutoUpdater({\n    app,\n    getMainWindow: () => mainWindow,\n    getSafetyState: async () => {\n      const reasons = [];\n      const idem = idempotencyStore().summary();\n      if (fiscalQueueDepth > 0) reasons.push(`Operazioni fiscali in coda: ${fiscalQueueDepth}`);\n      if (idem.inflight > 0) reasons.push(`Operazioni fiscali in corso: ${idem.inflight}`);\n      if (idem.uncertain > 0) reasons.push(`Operazioni fiscali da verificare: ${idem.uncertain}`);\n      if (mainWindow && !mainWindow.isDestroyed()) {\n        try {\n          const ui = await mainWindow.webContents.executeJavaScript(`(() => {\n            let activeIntent = false; let recoveryCount = 0;\n            try { activeIntent = Boolean(JSON.parse(localStorage.getItem('riflessaFiscalActiveIntentV356') || 'null')); } catch {}\n            try { const rows = JSON.parse(localStorage.getItem('riflessaFiscalRecoveryV355') || '[]'); recoveryCount = Array.isArray(rows) ? rows.length : 0; } catch {}\n            return { activeIntent, recoveryCount };\n          })()`, true);\n          if (ui?.activeIntent) reasons.push('Vendita fiscale interrotta da verificare');\n          if (Number(ui?.recoveryCount || 0) > 0) reasons.push(`Recovery fiscali pendenti: ${Number(ui.recoveryCount)}`);\n        } catch { reasons.push('Impossibile verificare lo stato fiscale della schermata'); }\n      }\n      return { safe: reasons.length === 0, reasons, queueDepth:fiscalQueueDepth, idempotency:idem };\n    },\n    log: (event, data) => appendMaster(paths().masterTxt, event, data)\n  });\n  app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });\n"
+          if s.count(old2)!=1: raise SystemExit('main ready patch non univoca')
+          p.write_text(s.replace(old2,new2,1))
+          PY
+
+          cat > tests/auto-update.test.js <<'NODE'
+          const test = require('node:test');
+          const assert = require('node:assert/strict');
+          const fs = require('fs');
+          const path = require('path');
+          const root = path.resolve(__dirname, '..');
+          const pkg = require('../package.json');
+          const updater = fs.readFileSync(path.join(root,'electron','auto-updater.js'),'utf8');
+          const main = fs.readFileSync(path.join(root,'electron','main.js'),'utf8');
+
+          test('auto update usa NSIS e repository pubblico dedicato', () => {
+            assert.equal(pkg.version, '3.5.7');
+            assert.equal(pkg.build.publish.provider, 'github');
+            assert.equal(pkg.build.publish.owner, 'Mirkolas');
+            assert.equal(pkg.build.publish.repo, 'riflessahairbeauty-workflows');
+            assert.equal(pkg.build.nsis.perMachine, false);
+            assert.ok(pkg.dependencies['electron-updater']);
+          });
+
+          test('installazione update richiede conferma e doppio preflight fiscale', () => {
+            assert.match(updater, /Installa e riavvia/);
+            assert.match(updater, /const finalStatus = await safety\(\)/);
+            assert.match(updater, /autoInstallOnAppQuit = false/);
+            assert.match(updater, /quitAndInstall\(false, true\)/);
+            assert.match(main, /riflessaFiscalActiveIntentV356/);
+            assert.match(main, /riflessaFiscalRecoveryV355/);
+            assert.match(main, /idem\.uncertain/);
+          });
+          NODE
+
+          node --check electron/auto-updater.js
+          node --check electron/main.js
+          npm test
+          npm run check
+          git diff --check
+      - name: Commit sorgente app
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
+          git commit -m 'Aggiunge auto update sicuro registratore 3.5.7'
+          git push origin HEAD:main
