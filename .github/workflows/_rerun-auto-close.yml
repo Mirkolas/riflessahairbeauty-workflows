@@ -1,0 +1,20 @@
+name: Rilancia patch chiusura automatica
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/_rerun-auto-close.yml"
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  rerun:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Rilancia workflow patch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run rerun 34748129249 --repo Mirkolas/riflessahairbeauty-workflows
