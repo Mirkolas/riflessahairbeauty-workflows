@@ -1,0 +1,71 @@
+name: Applica automazione completa 3.5.3
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/_apply-v353-automation.yml"
+
+permissions:
+  contents: read
+
+env:
+  SOURCE_REPOSITORY: Mirkolas/riflessahairbeauty
+  SOURCE_PAT: ${{ secrets.PUBLIC_REPO_TOKEN }}
+  APP_DIR: riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
+
+jobs:
+  patch-test-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout workflow e patch
+        uses: actions/checkout@v4
+        with:
+          path: workflows
+
+      - name: Checkout repo privata
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          ref: main
+          token: ${{ env.SOURCE_PAT }}
+          path: source
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Applica automazioni 3.5.3
+        shell: bash
+        run: python workflows/scripts/apply-v353-automation.py source
+
+      - name: Imposta versione 3.5.3
+        working-directory: source/${{ env.APP_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          CURRENT="$(node -p "require('./package.json').version")"
+          if [[ "${CURRENT}" != "3.5.3" ]]; then npm version 3.5.3 --no-git-tag-version; fi
+
+      - name: Installa dipendenze
+        working-directory: source/${{ env.APP_DIR }}
+        run: npm install --no-audit --no-fund
+
+      - name: Test
+        working-directory: source/${{ env.APP_DIR }}
+        run: npm test
+
+      - name: Check progetto
+        working-directory: source/${{ env.APP_DIR }}
+        run: npm run check
+
+      - name: Commit e push su main privato
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Automatizza flussi registratore 3.5.3"
+          git remote set-url origin "https://x-access-token:${SOURCE_PAT}@github.com/${SOURCE_REPOSITORY}.git"
+          git push origin HEAD:main
