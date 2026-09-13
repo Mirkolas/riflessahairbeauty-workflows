@@ -4,6 +4,7 @@ import base64
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -39,65 +40,75 @@ headers = {
 }
 
 
-def api(method: str, path: str, body: dict | None = None, allow_404: bool = False):
+def api(method: str, path: str, body: dict | None = None):
     url = f"https://api.github.com/repos/{repository}/{path}"
     data = None if body is None else json.dumps(body).encode("utf-8")
-    req = urllib.request.Request(url, data=data, method=method, headers=headers)
-    if data is not None:
-        req.add_header("Content-Type", "application/json")
-    try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            raw = resp.read()
-            return json.loads(raw.decode("utf-8")) if raw else None
-    except urllib.error.HTTPError as exc:
-        if allow_404 and exc.code == 404:
-            return None
-        detail = exc.read().decode("utf-8", errors="replace")[:1000]
-        raise RuntimeError(f"GitHub API {method} {path}: HTTP {exc.code}: {detail}") from exc
+    last_error = None
+    for attempt in range(1, 5):
+        req = urllib.request.Request(url, data=data, method=method, headers=headers)
+        if data is not None:
+            req.add_header("Content-Type", "application/json")
+        try:
+            with urllib.request.urlopen(req, timeout=90) as resp:
+                raw = resp.read()
+                return json.loads(raw.decode("utf-8")) if raw else None
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")[:1200]
+            last_error = RuntimeError(f"GitHub API {method} {path}: HTTP {exc.code}: {detail}")
+            if exc.code < 500 or attempt == 4:
+                raise last_error from exc
+            time.sleep(attempt * 2)
+        except Exception as exc:
+            last_error = exc
+            if attempt == 4:
+                raise
+            time.sleep(attempt * 2)
+    raise last_error or RuntimeError("Errore GitHub API")
 
+ref = api("GET", f"git/ref/heads/{urllib.parse.quote(branch, safe='')}")
+head_sha = ref["object"]["sha"]
+head_commit = api("GET", f"git/commits/{head_sha}")
+base_tree_sha = head_commit["tree"]["sha"]
+print(f"HEAD iniziale: {head_sha}")
 
-def content_path(rel: str) -> str:
-    return "contents/" + urllib.parse.quote(rel, safe="/")
-
-
-def remote_sha(rel: str) -> str | None:
-    encoded_branch = urllib.parse.quote(branch, safe="")
-    out = api("GET", f"{content_path(rel)}?ref={encoded_branch}", allow_404=True)
-    return out.get("sha") if out else None
-
-
-def upsert(rel: str):
+tree_entries = []
+for rel in files:
     local = root / rel
     if not local.is_file():
         raise FileNotFoundError(local)
-    sha = remote_sha(rel)
-    body = {
-        "message": f"Automatizza registratore 3.5.3: {rel}",
+    blob = api("POST", "git/blobs", {
         "content": base64.b64encode(local.read_bytes()).decode("ascii"),
-        "branch": branch,
-    }
-    if sha:
-        body["sha"] = sha
-    api("PUT", content_path(rel), body)
-    print(f"Pubblicato: {rel}")
-
-
-def delete_if_exists(rel: str):
-    sha = remote_sha(rel)
-    if not sha:
-        return
-    api("DELETE", content_path(rel), {
-        "message": "Aggiorna guida registratore 3.5.3",
-        "sha": sha,
-        "branch": branch,
+        "encoding": "base64",
     })
-    print(f"Eliminato: {rel}")
+    tree_entries.append({
+        "path": rel,
+        "mode": "100644",
+        "type": "blob",
+        "sha": blob["sha"],
+    })
+    print(f"Blob pronto: {rel}")
 
+tree_entries.append({
+    "path": old_guide,
+    "mode": "100644",
+    "type": "blob",
+    "sha": None,
+})
 
-for rel in files[:-2]:
-    upsert(rel)
+tree = api("POST", "git/trees", {
+    "base_tree": base_tree_sha,
+    "tree": tree_entries,
+})
+commit = api("POST", "git/commits", {
+    "message": "Automatizza flussi registratore 3.5.3",
+    "tree": tree["sha"],
+    "parents": [head_sha],
+})
+new_sha = commit["sha"]
+print(f"Commit preparato: {new_sha}")
 
-delete_if_exists(old_guide)
-upsert(files[-2])
-upsert(files[-1])
-print("Pubblicazione 3.5.3 completata")
+api("PATCH", f"git/refs/heads/{urllib.parse.quote(branch, safe='')}", {
+    "sha": new_sha,
+    "force": False,
+})
+print(f"Pubblicazione 3.5.3 completata: {new_sha}")
