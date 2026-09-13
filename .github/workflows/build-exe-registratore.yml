@@ -59,8 +59,8 @@ jobs:
           VERSION="$(node -p "require('./package.json').version")"
           SOURCE_SHA="$(git -C ../.. rev-parse HEAD)"
           TAG="registratore-v${VERSION}"
-          INSTALLER="riflessa-app-versione(${VERSION})-setup.exe"
-          PORTABLE="riflessa-app-versione(${VERSION}).exe"
+          INSTALLER="riflessa-app-${VERSION}-setup.exe"
+          PORTABLE="riflessa-app-${VERSION}.exe"
 
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "source_sha=${SOURCE_SHA}" >> "$GITHUB_OUTPUT"
