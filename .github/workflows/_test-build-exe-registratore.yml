@@ -1,0 +1,60 @@
+name: Test build EXE registratore
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/_test-build-exe-registratore.yml"
+
+permissions:
+  contents: read
+
+env:
+  APP_DIR: app/riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
+  SOURCE_PAT: ${{ secrets.PUBLIC_REPO_TOKEN }}
+
+jobs:
+  test-build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repo privata
+        uses: actions/checkout@v4
+        with:
+          repository: Mirkolas/riflessahairbeauty
+          ref: main
+          token: ${{ env.SOURCE_PAT }}
+          path: app
+          persist-credentials: false
+
+      - name: Configura Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Installa dipendenze
+        working-directory: ${{ env.APP_DIR }}
+        run: npm install --no-audit --no-fund
+
+      - name: Esegui test
+        working-directory: ${{ env.APP_DIR }}
+        run: npm test
+
+      - name: Verifica progetto
+        working-directory: ${{ env.APP_DIR }}
+        run: npm run check
+
+      - name: Genera installer EXE
+        working-directory: ${{ env.APP_DIR }}
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: npm run dist
+
+      - name: Verifica EXE senza pubblicarlo
+        shell: pwsh
+        working-directory: ${{ env.APP_DIR }}
+        run: |
+          $files = @(Get-ChildItem -Path "dist" -Filter "RiflessaRegistratore-Setup-*.exe" -File)
+          if ($files.Count -ne 1) { throw "EXE non trovato o risultato ambiguo: $($files.Count)" }
+          $f = $files[0]
+          Write-Host "BUILD_OK name=$($f.Name) sizeMB=$([math]::Round($f.Length / 1MB, 2))"
