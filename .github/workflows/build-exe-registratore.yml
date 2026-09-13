@@ -52,6 +52,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ env.SOURCE_PAT }}
+          FORCE_BUILD: ${{ github.event_name != 'schedule' }}
         run: |
           set -euo pipefail
           cd "source/${APP_DIR}"
@@ -65,7 +66,10 @@ jobs:
           echo "portable_name=${PORTABLE}" >> "$GITHUB_OUTPUT"
 
           ASSETS="$(gh release view "${TAG}" --repo "${SOURCE_REPOSITORY}" --json assets --jq '.assets[].name' 2>/dev/null || true)"
-          if printf '%s\n' "${ASSETS}" | grep -Fxq "${PORTABLE}"; then
+          if [[ "${FORCE_BUILD}" == "true" ]]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            echo "Build forzata: genero nuovamente ${PORTABLE} e sostituisco l'asset della release."
+          elif printf '%s\n' "${ASSETS}" | grep -Fxq "${PORTABLE}"; then
             echo "build=false" >> "$GITHUB_OUTPUT"
             echo "Versione ${VERSION}: ${PORTABLE} gia presente nella release privata."
           else
@@ -74,7 +78,7 @@ jobs:
           fi
 
   build-windows:
-    name: Build Windows x64 Portable
+    name: Build Windows x64 Portable firmata
     needs: verifica-versione
     if: needs.verifica-versione.outputs.build == 'true'
     runs-on: windows-latest
@@ -110,30 +114,92 @@ jobs:
         working-directory: source/${{ env.APP_DIR }}
         run: npm run check
 
-      - name: Genera EXE Portable
+      - name: Prepara certificato di firma Riflessa
+        shell: pwsh
+        env:
+          WINDOWS_CODESIGN_PFX_BASE64: ${{ secrets.WINDOWS_CODESIGN_PFX_BASE64 }}
+          WINDOWS_CODESIGN_PFX_PASSWORD: ${{ secrets.WINDOWS_CODESIGN_PFX_PASSWORD }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CODESIGN_PFX_BASE64)) { throw "WINDOWS_CODESIGN_PFX_BASE64 mancante" }
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CODESIGN_PFX_PASSWORD)) { throw "WINDOWS_CODESIGN_PFX_PASSWORD mancante" }
+
+          $pfxPath = Join-Path $env:RUNNER_TEMP "riflessa-codesign.pfx"
+          try {
+            $bytes = [Convert]::FromBase64String($env:WINDOWS_CODESIGN_PFX_BASE64)
+          } catch {
+            throw "WINDOWS_CODESIGN_PFX_BASE64 non valido"
+          }
+          [IO.File]::WriteAllBytes($pfxPath, $bytes)
+
+          $securePassword = ConvertTo-SecureString $env:WINDOWS_CODESIGN_PFX_PASSWORD -AsPlainText -Force
+          $cert = Import-PfxCertificate -FilePath $pfxPath -CertStoreLocation Cert:\CurrentUser\My -Password $securePassword
+          if (-not $cert) { throw "Import del certificato di firma fallito" }
+          if (-not $cert.HasPrivateKey) { throw "Il certificato non contiene la chiave privata" }
+          if ($cert.Subject -ne "CN=Riflessa Hair & Beauty") { throw "Certificato inatteso: $($cert.Subject)" }
+
+          foreach ($storeName in @("Root", "TrustedPublisher")) {
+            $store = New-Object System.Security.Cryptography.X509Certificates.X509Store($storeName, "CurrentUser")
+            $store.Open("ReadWrite")
+            try { $store.Add($cert) } finally { $store.Close() }
+          }
+
+          "CODESIGN_PFX_PATH=$pfxPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CODESIGN_THUMBPRINT=$($cert.Thumbprint)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Certificato di firma caricato: Riflessa Hair & Beauty"
+
+      - name: Genera EXE Portable firmata
         shell: pwsh
         working-directory: source/${{ env.APP_DIR }}
         env:
-          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          WINDOWS_CODESIGN_PFX_PASSWORD: ${{ secrets.WINDOWS_CODESIGN_PFX_PASSWORD }}
         run: |
           $ErrorActionPreference = "Stop"
           New-Item -ItemType Directory -Force -Path "release-out" | Out-Null
+
+          $env:CSC_LINK = $env:CODESIGN_PFX_PATH
+          $env:CSC_KEY_PASSWORD = $env:WINDOWS_CODESIGN_PFX_PASSWORD
+          Remove-Item Env:CSC_IDENTITY_AUTO_DISCOVERY -ErrorAction SilentlyContinue
+
           npm run portable
           if ($LASTEXITCODE -ne 0) { throw "Build Portable fallita" }
+
           $generated = @(Get-ChildItem -Path "dist" -Filter "RiflessaRegistratore-Setup-*.exe" -File)
           if ($generated.Count -ne 1) { throw "Portable generata non trovata o ambigua: $($generated.Count)" }
           Move-Item $generated[0].FullName (Join-Path "release-out" $env:PORTABLE_NAME) -Force
 
-      - name: Verifica EXE Portable generato
+      - name: Verifica firma digitale e EXE Portable
         shell: pwsh
         working-directory: source/${{ env.APP_DIR }}
         run: |
+          $ErrorActionPreference = "Stop"
           $portable = Get-Item (Join-Path "release-out" $env:PORTABLE_NAME)
           if ($portable.Length -lt 10MB) { throw "Portable troppo piccola: $($portable.Length)" }
-          Write-Host "Portable: $($portable.Name) - $([math]::Round($portable.Length / 1MB, 2)) MB"
-          Write-Host "SHA256 portable: $((Get-FileHash $portable.FullName -Algorithm SHA256).Hash)"
 
-      - name: Pubblica Portable nella release PRIVATA dell'app
+          $signature = Get-AuthenticodeSignature -FilePath $portable.FullName
+          if (-not $signature.SignerCertificate) { throw "EXE Portable non firmata" }
+          if ($signature.SignerCertificate.Subject -ne "CN=Riflessa Hair & Beauty") {
+            throw "Firmatario inatteso: $($signature.SignerCertificate.Subject)"
+          }
+          if ($signature.SignerCertificate.Thumbprint -ne $env:CODESIGN_THUMBPRINT) {
+            throw "Thumbprint della firma non corrispondente al certificato configurato"
+          }
+          if ($signature.Status -ne "Valid") { throw "Firma Authenticode non valida: $($signature.Status) - $($signature.StatusMessage)" }
+
+          $inner = Get-Item "dist\win-unpacked\Riflessabeautyapp.exe" -ErrorAction Stop
+          $innerSignature = Get-AuthenticodeSignature -FilePath $inner.FullName
+          if (-not $innerSignature.SignerCertificate -or $innerSignature.SignerCertificate.Subject -ne "CN=Riflessa Hair & Beauty") {
+            throw "Eseguibile interno Electron non firmato con Riflessa Hair & Beauty"
+          }
+          if ($innerSignature.Status -ne "Valid") { throw "Firma eseguibile interno non valida: $($innerSignature.Status)" }
+
+          Write-Host "Portable firmata correttamente: $($portable.Name)"
+          Write-Host "Firmatario: $($signature.SignerCertificate.Subject)"
+          Write-Host "Scadenza certificato: $($signature.SignerCertificate.NotAfter)"
+          Write-Host "Dimensione: $([math]::Round($portable.Length / 1MB, 2)) MB"
+          Write-Host "SHA256: $((Get-FileHash $portable.FullName -Algorithm SHA256).Hash)"
+
+      - name: Pubblica Portable firmata nella release PRIVATA dell'app
         shell: pwsh
         working-directory: source/${{ env.APP_DIR }}
         env:
@@ -143,7 +209,7 @@ jobs:
           $tag = "registratore-v$env:VERSION"
           $portable = Join-Path "release-out" $env:PORTABLE_NAME
           $title = "Riflessa Registratore v$env:VERSION"
-          $notes = "Build Windows x64 Portable del registratore. File ufficiale: $env:PORTABLE_NAME. Commit sorgente: $env:SOURCE_SHA"
+          $notes = "Build Windows x64 Portable firmata con Riflessa Hair & Beauty. File ufficiale: $env:PORTABLE_NAME. Commit sorgente: $env:SOURCE_SHA"
           $published = $false
 
           for ($attempt = 1; $attempt -le 5 -and -not $published; $attempt++) {
@@ -161,3 +227,16 @@ jobs:
 
           if (-not $published) { throw "Pubblicazione release fallita dopo 5 tentativi" }
           Write-Host "Release privata pronta: $tag / $env:PORTABLE_NAME"
+
+      - name: Elimina certificato temporaneo dal runner
+        if: always()
+        shell: pwsh
+        run: |
+          if ($env:CODESIGN_THUMBPRINT) {
+            foreach ($storeName in @("My", "Root", "TrustedPublisher")) {
+              Remove-Item "Cert:\CurrentUser\$storeName\$env:CODESIGN_THUMBPRINT" -Force -ErrorAction SilentlyContinue
+            }
+          }
+          if ($env:CODESIGN_PFX_PATH) {
+            Remove-Item $env:CODESIGN_PFX_PATH -Force -ErrorAction SilentlyContinue
+          }
