@@ -70,3 +70,5 @@ jobs:
           git add -- "${APP_DIR}/package-lock.json"
           git commit -m "Allinea package-lock alla versione 3.5.17"
           git push origin HEAD:main
+
+# trigger 3.5.17
