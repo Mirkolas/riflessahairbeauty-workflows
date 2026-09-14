@@ -137,7 +137,7 @@ css_text = css.read_text(encoding='utf-8')
 if css_marker not in css_text:
     css.write_text(css_text.rstrip() + css_block + '\n', encoding='utf-8')
 
- test_content = '''const test = require('node:test');
+test_content = '''const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
@@ -155,7 +155,6 @@ test('cassa separa servizi e prodotti e ordina entrambi per prezzo crescente', (
   assert.match(css, /\\.pos-product-section-grid\\{[\\s\\S]*display:grid/);
 });
 '''
-# remove accidental leading space from the Python source line above when writing
 if not test_file.exists() or test_file.read_text(encoding='utf-8') != test_content:
     test_file.write_text(test_content, encoding='utf-8')
 
