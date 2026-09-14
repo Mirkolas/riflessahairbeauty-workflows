@@ -1,10 +1,10 @@
-name: Firebase deploy - registratore
+name: Firebase rules - registratore
 
 on:
   workflow_dispatch:
     inputs:
       ref:
-        description: "Branch, tag o commit della repo applicativa da pubblicare"
+        description: "Branch, tag o commit della repo applicativa da usare per le regole"
         required: true
         default: "main"
         type: string
@@ -15,19 +15,18 @@ permissions:
   contents: read
 
 concurrency:
-  group: firebase-deploy-registratore
+  group: firebase-rules-registratore
   cancel-in-progress: false
 
 env:
   PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID }}
-  HOSTING_TARGET: ${{ vars.FIREBASE_HOSTING_TARGET }}
   SOURCE_REPOSITORY: Mirkolas/riflessahairbeauty
   SOURCE_PAT: ${{ secrets.PUBLIC_REPO_TOKEN }}
   GOOGLE_CREDENTIALS_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
 
 jobs:
   deploy:
-    name: Deploy Firebase registratore
+    name: Deploy sole Firestore Rules registratore
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -36,7 +35,6 @@ jobs:
         run: |
           set -euo pipefail
           [[ -n "${PROJECT_ID}" ]] || { echo "::error::Manca la Variable FIREBASE_PROJECT_ID."; exit 1; }
-          [[ "${HOSTING_TARGET}" == "registratore" ]] || { echo "::error::FIREBASE_HOSTING_TARGET deve essere registratore."; exit 1; }
           [[ -n "${SOURCE_PAT}" ]] || { echo "::error::Manca il Secret PUBLIC_REPO_TOKEN."; exit 1; }
           [[ -n "${GOOGLE_CREDENTIALS_JSON}" ]] || { echo "::error::Manca il Secret FIREBASE_SERVICE_ACCOUNT."; exit 1; }
 
@@ -81,12 +79,12 @@ jobs:
           create_credentials_file: true
           export_environment_variables: true
 
-      - name: Deploy Hosting e Firestore Rules (piano Spark)
+      - name: Deploy sole Firestore Rules
         working-directory: app/riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
         shell: bash
         run: |
           set -euo pipefail
           ./node_modules/.bin/firebase deploy \
             --project "${PROJECT_ID}" \
-            --only "firestore:rules,hosting:${HOSTING_TARGET}" \
+            --only "firestore:rules" \
             --non-interactive
