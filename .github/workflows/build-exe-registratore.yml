@@ -38,8 +38,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -n "${SOURCE_PAT}" || { echo "PUBLIC_REPO_TOKEN mancante"; exit 1; }
-          test -n "${GOOGLE_CREDENTIALS_JSON}" || { echo "FIREBASE_SERVICE_ACCOUNT mancante"; exit 1; }
+          test -n "$SOURCE_PAT" || { echo '::error::PUBLIC_REPO_TOKEN mancante'; exit 1; }
+          test -n "$GOOGLE_CREDENTIALS_JSON" || { echo '::error::FIREBASE_SERVICE_ACCOUNT mancante'; exit 1; }
 
       - name: Checkout sorgente privato
         uses: actions/checkout@v4
@@ -51,7 +51,7 @@ jobs:
           persist-credentials: false
           fetch-depth: 1
 
-      - name: Controlla asset release privata
+      - name: Controlla release privata
         id: check
         shell: bash
         env:
@@ -65,27 +65,21 @@ jobs:
           TAG="registratore-v${VERSION}"
           PORTABLE="riflessa-app-${VERSION}.exe"
           INSTALLER="RiflessaRegistratore-Setup-${VERSION}-x64.exe"
-
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "source_sha=${SOURCE_SHA}" >> "$GITHUB_OUTPUT"
           echo "portable_name=${PORTABLE}" >> "$GITHUB_OUTPUT"
           echo "installer_name=${INSTALLER}" >> "$GITHUB_OUTPUT"
 
-          ASSETS="$(gh release view "${TAG}" --repo "${SOURCE_REPOSITORY}" --json assets --jq '.assets[].name' 2>/dev/null || true)"
+          ASSETS="$(gh release view "$TAG" --repo "$SOURCE_REPOSITORY" --json assets --jq '.assets[].name' 2>/dev/null || true)"
           COMPLETE=true
-          for REQUIRED in "${PORTABLE}" "${INSTALLER}" "${INSTALLER}.blockmap" "latest.yml"; do
-            if ! printf '%s\n' "${ASSETS}" | grep -Fxq "${REQUIRED}"; then COMPLETE=false; fi
+          for REQUIRED in "$PORTABLE" "$INSTALLER" "$INSTALLER.blockmap" latest.yml; do
+            if ! printf '%s\n' "$ASSETS" | grep -Fxq "$REQUIRED"; then COMPLETE=false; fi
           done
-
-          if [[ "${FORCE_BUILD}" == 'true' ]]; then
-            echo "build=true" >> "$GITHUB_OUTPUT"
-            echo "Build forzata della versione ${VERSION}."
-          elif [[ "${COMPLETE}" == 'true' ]]; then
-            echo "build=false" >> "$GITHUB_OUTPUT"
-            echo "Release privata ${TAG} completa."
+          if [[ "$FORCE_BUILD" == 'true' || "$COMPLETE" != 'true' ]]; then
+            echo 'build=true' >> "$GITHUB_OUTPUT"
           else
-            echo "build=true" >> "$GITHUB_OUTPUT"
-            echo "Release privata ${TAG} assente o incompleta: genero Portable + NSIS + metadata updater."
+            echo 'build=false' >> "$GITHUB_OUTPUT"
+            echo "Release privata $TAG già completa."
           fi
 
   build-windows:
@@ -100,7 +94,7 @@ jobs:
       PORTABLE_NAME: ${{ needs.verifica-versione.outputs.portable_name }}
       INSTALLER_NAME: ${{ needs.verifica-versione.outputs.installer_name }}
     steps:
-      - name: Checkout versione esatta della repo privata
+      - name: Checkout versione esatta
         uses: actions/checkout@v4
         with:
           repository: ${{ env.SOURCE_REPOSITORY }}
@@ -110,153 +104,147 @@ jobs:
           persist-credentials: false
           fetch-depth: 1
 
-      - name: Configura Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: '22'
 
-      - name: Installa dipendenze
-        working-directory: source/${{ env.APP_DIR }}
+      - name: Test e preflight
         shell: pwsh
-        run: npm ci --no-audit --no-fund
-
-      - name: Test e preflight release
         working-directory: source/${{ env.APP_DIR }}
-        shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          npm ci --no-audit --no-fund
           npm test
-          if ($LASTEXITCODE -ne 0) { throw "Test falliti" }
+          if ($LASTEXITCODE -ne 0) { throw 'Test falliti' }
           npm run check
-          if ($LASTEXITCODE -ne 0) { throw "Check progetto fallito" }
+          if ($LASTEXITCODE -ne 0) { throw 'Check progetto fallito' }
           node scripts/release-preflight.cjs
-          if ($LASTEXITCODE -ne 0) { throw "Release preflight fallito" }
+          if ($LASTEXITCODE -ne 0) { throw 'Release preflight fallito' }
 
-      - name: Prepara PFX temporaneo di firma
+      - name: Prepara certificato firma
         shell: pwsh
         env:
           WINDOWS_CODESIGN_PFX_BASE64: ${{ secrets.WINDOWS_CODESIGN_PFX_BASE64 }}
           WINDOWS_CODESIGN_PFX_PASSWORD: ${{ secrets.WINDOWS_CODESIGN_PFX_PASSWORD }}
         run: |
-          $ErrorActionPreference = "Stop"
-          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CODESIGN_PFX_BASE64)) { throw "WINDOWS_CODESIGN_PFX_BASE64 mancante" }
-          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CODESIGN_PFX_PASSWORD)) { throw "WINDOWS_CODESIGN_PFX_PASSWORD mancante" }
-          $pfxPath = Join-Path $env:RUNNER_TEMP "riflessa-codesign.pfx"
-          [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:WINDOWS_CODESIGN_PFX_BASE64))
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CODESIGN_PFX_BASE64)) { throw 'PFX mancante' }
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CODESIGN_PFX_PASSWORD)) { throw 'Password PFX mancante' }
+          $pfx = Join-Path $env:RUNNER_TEMP 'riflessa-codesign.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CODESIGN_PFX_BASE64))
           $flags = [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet
-          $expected = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($pfxPath, $env:WINDOWS_CODESIGN_PFX_PASSWORD, $flags)
-          if (-not $expected.HasPrivateKey) { throw "Il PFX non contiene la chiave privata" }
-          if ($expected.Subject -ne "CN=Riflessa Hair & Beauty") { throw "Certificato inatteso: $($expected.Subject)" }
-          "CODESIGN_PFX_PATH=$pfxPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "CODESIGN_THUMBPRINT=$($expected.Thumbprint)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($pfx, $env:WINDOWS_CODESIGN_PFX_PASSWORD, $flags)
+          if (-not $cert.HasPrivateKey) { throw 'Il PFX non contiene chiave privata' }
+          if ($cert.Subject -ne 'CN=Riflessa Hair & Beauty') { throw "Certificato inatteso: $($cert.Subject)" }
+          "CODESIGN_PFX_PATH=$pfx" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          "CODESIGN_THUMBPRINT=$($cert.Thumbprint)" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
 
-      - name: Genera Portable e NSIS firmati
+      - name: Genera Portable e NSIS
         shell: pwsh
         working-directory: source/${{ env.APP_DIR }}
         env:
           WINDOWS_CODESIGN_PFX_PASSWORD: ${{ secrets.WINDOWS_CODESIGN_PFX_PASSWORD }}
         run: |
-          $ErrorActionPreference = "Stop"
-          New-Item -ItemType Directory -Force -Path "release-out" | Out-Null
+          $ErrorActionPreference = 'Stop'
           $env:CSC_LINK = $env:CODESIGN_PFX_PATH
           $env:CSC_KEY_PASSWORD = $env:WINDOWS_CODESIGN_PFX_PASSWORD
           Remove-Item Env:CSC_IDENTITY_AUTO_DISCOVERY -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path release-out | Out-Null
 
-          npm run portable -- --publish never
-          if ($LASTEXITCODE -ne 0) { throw "Build Portable fallita" }
-          $portableGenerated = @(Get-ChildItem -Path "dist" -Filter "RiflessaRegistratore-Setup-*.exe" -File)
-          if ($portableGenerated.Count -ne 1) { throw "Portable generata non trovata o ambigua: $($portableGenerated.Count)" }
-          Move-Item $portableGenerated[0].FullName (Join-Path "release-out" $env:PORTABLE_NAME) -Force
+          npx electron-builder --win portable --x64 --publish never
+          if ($LASTEXITCODE -ne 0) { throw 'Build Portable fallita' }
+          $portable = @(Get-ChildItem dist -Filter 'RiflessaRegistratore-Setup-*.exe' -File)
+          if ($portable.Count -ne 1) { throw "Portable non trovata o ambigua: $($portable.Count)" }
+          Move-Item $portable[0].FullName (Join-Path release-out $env:PORTABLE_NAME) -Force
 
-          Remove-Item -Recurse -Force "dist\win-unpacked" -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force dist\win-unpacked -ErrorAction SilentlyContinue
           npx electron-builder --win nsis --x64 --publish never
-          if ($LASTEXITCODE -ne 0) { throw "Build NSIS fallita" }
+          if ($LASTEXITCODE -ne 0) { throw 'Build NSIS fallita' }
 
-          $installer = Get-Item (Join-Path "dist" $env:INSTALLER_NAME) -ErrorAction Stop
-          $blockmap = Get-Item (Join-Path "dist" "$env:INSTALLER_NAME.blockmap") -ErrorAction Stop
-          $latest = Get-Item "dist\latest.yml" -ErrorAction Stop
+          $installer = Get-Item (Join-Path dist $env:INSTALLER_NAME) -ErrorAction Stop
+          $blockmap = Get-Item (Join-Path dist "$env:INSTALLER_NAME.blockmap") -ErrorAction Stop
+          $latest = Get-Item dist\latest.yml -ErrorAction Stop
+          $portableFinal = Get-Item (Join-Path release-out $env:PORTABLE_NAME) -ErrorAction Stop
           "INSTALLER=$($installer.FullName)" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
           "BLOCKMAP=$($blockmap.FullName)" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
           "LATEST=$($latest.FullName)" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
-          "PORTABLE=$((Get-Item (Join-Path 'release-out' $env:PORTABLE_NAME)).FullName)" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          "PORTABLE=$($portableFinal.FullName)" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
 
-      - name: Verifica firme e metadata updater
+      - name: Verifica firme e metadata
         shell: pwsh
         working-directory: source/${{ env.APP_DIR }}
         run: |
-          $ErrorActionPreference = "Stop"
+          $ErrorActionPreference = 'Stop'
           foreach ($file in @($env:PORTABLE, $env:INSTALLER)) {
             $item = Get-Item $file -ErrorAction Stop
             if ($item.Length -lt 10MB) { throw "Eseguibile troppo piccolo: $($item.Name)" }
             $sig = Get-AuthenticodeSignature $item.FullName
-            if (-not $sig.SignerCertificate) { throw "Eseguibile non firmato: $($item.Name)" }
-            if ($sig.SignerCertificate.Subject -ne "CN=Riflessa Hair & Beauty") { throw "Firmatario inatteso: $($sig.SignerCertificate.Subject)" }
+            if (-not $sig.SignerCertificate) { throw "Non firmato: $($item.Name)" }
+            if ($sig.SignerCertificate.Subject -ne 'CN=Riflessa Hair & Beauty') { throw "Firmatario inatteso: $($item.Name)" }
             if ($sig.SignerCertificate.Thumbprint -ne $env:CODESIGN_THUMBPRINT) { throw "Thumbprint inatteso: $($item.Name)" }
           }
-          $inner = Get-Item "dist\win-unpacked\Riflessabeautyapp.exe" -ErrorAction Stop
+          $inner = Get-Item dist\win-unpacked\Riflessabeautyapp.exe -ErrorAction Stop
           $innerSig = Get-AuthenticodeSignature $inner.FullName
-          if (-not $innerSig.SignerCertificate -or $innerSig.SignerCertificate.Thumbprint -ne $env:CODESIGN_THUMBPRINT) { throw "Eseguibile Electron interno non firmato correttamente" }
+          if (-not $innerSig.SignerCertificate -or $innerSig.SignerCertificate.Thumbprint -ne $env:CODESIGN_THUMBPRINT) { throw 'EXE interno non firmato correttamente' }
           $yaml = Get-Content $env:LATEST -Raw
-          if ($yaml -notmatch [regex]::Escape($env:INSTALLER_NAME)) { throw "latest.yml non punta all installer" }
-          if ($yaml -notmatch 'sha512:') { throw "latest.yml privo di SHA512" }
-          if ($yaml -notmatch "version:\s*$([regex]::Escape($env:VERSION))") { throw "Versione latest.yml inattesa" }
+          if ($yaml -notmatch [regex]::Escape($env:INSTALLER_NAME)) { throw 'latest.yml non punta all installer' }
+          if ($yaml -notmatch 'sha512:') { throw 'latest.yml privo di SHA512' }
+          if ($yaml -notmatch "version:\s*$([regex]::Escape($env:VERSION))") { throw 'Versione latest.yml inattesa' }
           Write-Host "Installer SHA256: $((Get-FileHash $env:INSTALLER -Algorithm SHA256).Hash)"
 
-      - name: Autenticazione Google Cloud per storage privato
+      - name: Autenticazione Google Cloud
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ env.GOOGLE_CREDENTIALS_JSON }}
           create_credentials_file: true
           export_environment_variables: true
 
-      - name: Configura gcloud
-        uses: google-github-actions/setup-gcloud@v2
+      - uses: google-github-actions/setup-gcloud@v2
 
-      - name: Pubblica asset nello storage privato updater
+      - name: Pubblica update su Storage privato
         shell: pwsh
         run: |
-          $ErrorActionPreference = "Stop"
+          $ErrorActionPreference = 'Stop'
           $versionBase = "gs://$env:UPDATE_BUCKET/registratore-updates/versions/$env:VERSION"
           $currentBase = "gs://$env:UPDATE_BUCKET/registratore-updates/current"
-          foreach ($pair in @(
+          $uploads = @(
             @($env:INSTALLER, "$versionBase/$env:INSTALLER_NAME"),
             @($env:BLOCKMAP, "$versionBase/$env:INSTALLER_NAME.blockmap"),
             @($env:LATEST, "$versionBase/latest.yml"),
             @($env:INSTALLER, "$currentBase/$env:INSTALLER_NAME"),
             @($env:BLOCKMAP, "$currentBase/$env:INSTALLER_NAME.blockmap")
-          )) {
+          )
+          foreach ($pair in $uploads) {
             & gcloud storage cp $pair[0] $pair[1]
-            if ($LASTEXITCODE -ne 0) { throw "Upload storage fallito: $($pair[1])" }
+            if ($LASTEXITCODE -ne 0) { throw "Upload fallito: $($pair[1])" }
           }
-          # latest.yml viene aggiornato per ultimo: i client non vedono mai metadata prima dei binari.
+          # latest.yml sempre ultimo: niente metadata anticipati rispetto ai binari.
           & gcloud storage cp $env:LATEST "$currentBase/latest.yml"
-          if ($LASTEXITCODE -ne 0) { throw "Upload latest.yml fallito" }
+          if ($LASTEXITCODE -ne 0) { throw 'Upload latest.yml fallito' }
 
-      - name: Pubblica tutti gli asset nella release PRIVATA
+      - name: Pubblica release PRIVATA completa
         shell: pwsh
         working-directory: source/${{ env.APP_DIR }}
         env:
           GH_TOKEN: ${{ env.SOURCE_PAT }}
         run: |
-          $ErrorActionPreference = "Continue"
+          $ErrorActionPreference = 'Continue'
           $tag = "registratore-v$env:VERSION"
           $title = "Riflessa Registratore v$env:VERSION"
-          $notes = "Build Windows firmata. Portable + installer NSIS e metadata updater privati. Commit sorgente: $env:SOURCE_SHA"
+          $notes = "Build Windows firmata. Portable + NSIS + metadata auto-update privati. Commit sorgente: $env:SOURCE_SHA"
           $assets = @($env:PORTABLE, $env:INSTALLER, $env:BLOCKMAP, $env:LATEST)
-          $published = $false
-          for ($attempt = 1; $attempt -le 5 -and -not $published; $attempt++) {
-            gh release view $tag --repo $env:SOURCE_REPOSITORY *> $null
-            if ($LASTEXITCODE -eq 0) {
-              gh release upload $tag @assets --clobber --repo $env:SOURCE_REPOSITORY
-            } else {
-              gh release create $tag @assets --repo $env:SOURCE_REPOSITORY --target $env:SOURCE_SHA --title $title --notes $notes
-            }
-            if ($LASTEXITCODE -eq 0) { $published = $true; break }
-            if ($attempt -lt 5) { Start-Sleep -Seconds (10 * $attempt) }
+          gh release view $tag --repo $env:SOURCE_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag @assets --clobber --repo $env:SOURCE_REPOSITORY
+          } else {
+            gh release create $tag @assets --repo $env:SOURCE_REPOSITORY --target $env:SOURCE_SHA --title $title --notes $notes
           }
-          if (-not $published) { throw "Pubblicazione release privata fallita dopo 5 tentativi" }
+          if ($LASTEXITCODE -ne 0) { throw 'Pubblicazione release privata fallita' }
 
-      - name: Elimina PFX temporaneo dal runner
+      - name: Elimina certificato temporaneo
         if: always()
         shell: pwsh
         run: |
           if ($env:CODESIGN_PFX_PATH) { Remove-Item $env:CODESIGN_PFX_PATH -Force -ErrorAction SilentlyContinue }
+
+# trigger privato 3.5.11 - 2026-09-14
