@@ -109,3 +109,5 @@ jobs:
           CODE="$(curl -sS -o /tmp/private-update-check.txt -w '%{http_code}' "$URL")"
           test "$CODE" = '401' || { cat /tmp/private-update-check.txt; echo "::error::Endpoint privato inatteso: HTTP $CODE"; exit 1; }
           echo "Endpoint update privato attivo e protetto: HTTP $CODE"
+
+# trigger 2026-09-14
