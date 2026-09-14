@@ -42,7 +42,7 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Verifica 3.5.11 e prepara funzione
+      - name: Verifica 3.5.11 e funzione
         shell: bash
         working-directory: source/${{ env.APP_DIR }}
         run: |
@@ -52,9 +52,6 @@ jobs:
           npm ci --prefix functions --no-audit --no-fund
           npm test
           node -c functions/index.js
-          ENCODED="$(printf '%s' "$GOOGLE_CREDENTIALS_JSON" | base64 -w0)"
-          printf 'UPDATE_SIGNER_SERVICE_ACCOUNT_B64=%s\n' "$ENCODED" > functions/.env
-          chmod 600 functions/.env
 
       - name: Autenticazione Google Cloud
         uses: google-github-actions/auth@v2
@@ -63,12 +60,32 @@ jobs:
           create_credentials_file: true
           export_environment_variables: true
 
-      - name: Deploy funzione privata
+      - name: Configura gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy diretto Cloud Functions gen2
         shell: bash
-        working-directory: source/${{ env.APP_DIR }}
+        working-directory: source/${{ env.APP_DIR }}/functions
         run: |
           set -euo pipefail
-          ./node_modules/.bin/firebase deploy --project "$PROJECT_ID" --only functions:privateUpdates --non-interactive
+          ENCODED="$(printf '%s' "$GOOGLE_CREDENTIALS_JSON" | base64 -w0)"
+          printf 'UPDATE_SIGNER_SERVICE_ACCOUNT_B64: "%s"\n' "$ENCODED" > "$RUNNER_TEMP/update-env.yaml"
+          chmod 600 "$RUNNER_TEMP/update-env.yaml"
+          gcloud functions deploy privateUpdates \
+            --gen2 \
+            --project="$PROJECT_ID" \
+            --region=europe-west1 \
+            --runtime=nodejs22 \
+            --source=. \
+            --entry-point=privateUpdates \
+            --trigger-http \
+            --allow-unauthenticated \
+            --memory=256Mi \
+            --timeout=30s \
+            --max-instances=5 \
+            --env-vars-file="$RUNNER_TEMP/update-env.yaml" \
+            --quiet
+          rm -f "$RUNNER_TEMP/update-env.yaml"
 
       - name: Verifica protezione endpoint
         shell: bash
@@ -83,7 +100,7 @@ jobs:
           fi
           echo 'Endpoint privato attivo: richiesta senza Firebase ID token respinta con HTTP 401.'
 
-      - name: Elimina env temporanea
+      - name: Elimina file temporanei
         if: always()
         shell: bash
-        run: rm -f "source/${APP_DIR}/functions/.env"
+        run: rm -f "$RUNNER_TEMP/update-env.yaml"
