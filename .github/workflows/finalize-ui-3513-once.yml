@@ -1,0 +1,94 @@
+name: Finalizza UI registratore 3.5.13 una tantum
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/finalize-ui-3513-once.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    env:
+      SOURCE_REPOSITORY: Mirkolas/riflessahairbeauty
+      APP_DIR: riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
+      SOURCE_PAT: ${{ secrets.PUBLIC_REPO_TOKEN }}
+    steps:
+      - name: Verifica credenziale sorgente
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$SOURCE_PAT" || { echo '::error::PUBLIC_REPO_TOKEN mancante'; exit 1; }
+
+      - name: Checkout sorgente privato
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          ref: main
+          token: ${{ env.SOURCE_PAT }}
+          path: source
+          persist-credentials: false
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Verifica tema grafico e porta a 3.5.13
+        shell: bash
+        working-directory: source/${{ env.APP_DIR }}
+        run: |
+          set -euo pipefail
+          test -f ui-v3513.css
+          grep -Fq '@import url("ui-v3513.css");' responsive.css
+          grep -Fq '"ui-v3513.css"' package.json
+          CURRENT="$(node -p "require('./package.json').version")"
+          if [[ "$CURRENT" != "3.5.12" && "$CURRENT" != "3.5.13" ]]; then
+            echo "::error::Versione sorgente inattesa: $CURRENT"
+            exit 1
+          fi
+          if [[ "$CURRENT" != "3.5.13" ]]; then
+            npm version 3.5.13 --no-git-tag-version
+          fi
+          test "$(node -p "require('./package.json').version")" = "3.5.13"
+          test "$(node -p "require('./package-lock.json').version")" = "3.5.13"
+          test "$(node -p "require('./package-lock.json').packages[''].version")" = "3.5.13"
+
+      - name: Test completi e verifica progetto
+        shell: bash
+        working-directory: source/${{ env.APP_DIR }}
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+          npm test
+          npm run check
+          node scripts/release-preflight.cjs
+
+      - name: Pubblica sorgente 3.5.13
+        shell: bash
+        working-directory: source
+        run: |
+          set -euo pipefail
+          git config user.name "Riflessa Release Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add "${APP_DIR}/package.json" "${APP_DIR}/package-lock.json"
+          if git diff --cached --quiet; then
+            echo "Versione 3.5.13 già finalizzata."
+          else
+            git commit -m "Rifinisce tutte le interfacce registratore 3.5.13"
+            git remote set-url origin "https://x-access-token:${SOURCE_PAT}@github.com/${SOURCE_REPOSITORY}.git"
+            git push origin HEAD:main
+          fi
+
+      - name: Avvia build firmata privata 3.5.13
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run build-exe-registratore.yml --repo Mirkolas/riflessahairbeauty-workflows
