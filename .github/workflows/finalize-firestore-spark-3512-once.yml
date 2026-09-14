@@ -105,18 +105,20 @@ jobs:
           RULESET="$(jq -r '.name // empty' "$RUNNER_TEMP/ruleset-response.json")"
           test -n "$RULESET" || { cat "$RUNNER_TEMP/ruleset-response.json"; exit 1; }
           RELEASE_NAME="projects/$PROJECT_ID/releases/cloud.firestore"
-          jq -n --arg ruleset "$RULESET" '{rulesetName:$ruleset}' > "$RUNNER_TEMP/release-patch.json"
+          jq -n --arg name "$RELEASE_NAME" --arg ruleset "$RULESET" '{release:{name:$name,rulesetName:$ruleset},updateMask:"rulesetName"}' > "$RUNNER_TEMP/release-patch.json"
           CODE="$(curl -sS -o "$RUNNER_TEMP/release-response.json" -w '%{http_code}' \
             -H "Authorization: Bearer $TOKEN" \
             -H 'Content-Type: application/json' \
             -X PATCH \
             -d @"$RUNNER_TEMP/release-patch.json" \
-            "https://firebaserules.googleapis.com/v1/$RELEASE_NAME?updateMask=rulesetName")"
+            "https://firebaserules.googleapis.com/v1/$RELEASE_NAME")"
           if [[ "$CODE" != '200' ]]; then
             cat "$RUNNER_TEMP/release-response.json"
             echo "::error::Deploy Firestore Rules HTTP $CODE"
             exit 1
           fi
+          DEPLOYED="$(jq -r '.rulesetName // empty' "$RUNNER_TEMP/release-response.json")"
+          test "$DEPLOYED" = "$RULESET" || { cat "$RUNNER_TEMP/release-response.json"; exit 1; }
           echo "Firestore Rules attive: $RULESET"
 
-# retry finale dopo check-project dinamico
+# PATCH Firebase Rules v1 con payload release + updateMask
