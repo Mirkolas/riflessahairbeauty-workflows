@@ -1,0 +1,45 @@
+name: Ispeziona Firebase Storage una tantum
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/inspect-storage-once.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID }}
+      GOOGLE_CREDENTIALS_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+    steps:
+      - name: Verifica configurazione
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$PROJECT_ID"
+          test -n "$GOOGLE_CREDENTIALS_JSON"
+
+      - name: Autenticazione Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ env.GOOGLE_CREDENTIALS_JSON }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Elenca bucket e localizzazione
+        shell: bash
+        run: |
+          set -u
+          echo '=== BUCKETS ==='
+          gcloud storage buckets list --project "$PROJECT_ID" --format='table(name,location,storageClass)' || true
+          echo '=== FIRESTORE ==='
+          gcloud firestore databases describe --project "$PROJECT_ID" --database='(default)' --format='yaml(name,locationId,type)' || true
+          echo '=== PROJECT ==='
+          gcloud projects describe "$PROJECT_ID" --format='yaml(projectId,projectNumber)' || true
