@@ -66,6 +66,21 @@ jobs:
           cd "source/${APP_DIR}"
           npm version 3.5.10 --no-git-tag-version
 
+      - name: Allinea test legacy IVA zero alla specifica v5.9
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('fs');
+          const p = `source/${process.env.APP_DIR}/tests/after-sale-production.test.js`;
+          let s = fs.readFileSync(p, 'utf8');
+          const oldLine = "assert.match(src,/\\/0\\/\\$\\{g\\.nature\\}\\/\\//);";
+          const newLine = "assert.match(src,/vatField = g\\.nature === 'VI'/);";
+          if (!s.includes(oldLine)) throw new Error('Aspettativa legacy IVA 0 non trovata');
+          s = s.replace(oldLine, newLine);
+          fs.writeFileSync(p, s, 'utf8');
+          NODE
+
       - name: Installa dipendenze
         working-directory: source/${{ env.APP_DIR }}
         run: npm ci --no-audit --no-fund
