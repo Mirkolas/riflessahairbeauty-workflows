@@ -1,0 +1,135 @@
+name: Pubblica release privata registratore 3.5.11
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/publish-private-3511-once.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      SOURCE_REPOSITORY: Mirkolas/riflessahairbeauty
+      APP_DIR: riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
+      SOURCE_PAT: ${{ secrets.PUBLIC_REPO_TOKEN }}
+      VERSION: 3.5.11
+      SOURCE_SHA: 433786bd06993f65418abd02d293642195bb21ab
+      PORTABLE_NAME: riflessa-app-3.5.11.exe
+      INSTALLER_NAME: RiflessaRegistratore-Setup-3.5.11-x64.exe
+
+    steps:
+      - name: Checkout sorgente privato esatto
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          ref: ${{ env.SOURCE_SHA }}
+          token: ${{ env.SOURCE_PAT }}
+          path: source
+          persist-credentials: false
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Test e preflight
+        shell: pwsh
+        working-directory: source/${{ env.APP_DIR }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          npm ci --no-audit --no-fund
+          $actual = node -p "require('./package.json').version"
+          if ($actual -ne $env:VERSION) { throw "Versione inattesa: $actual" }
+          npm test
+          if ($LASTEXITCODE -ne 0) { throw 'Test falliti' }
+          npm run check
+          if ($LASTEXITCODE -ne 0) { throw 'Check progetto fallito' }
+          node scripts/release-preflight.cjs
+          if ($LASTEXITCODE -ne 0) { throw 'Release preflight fallito' }
+
+      - name: Prepara certificato firma
+        shell: pwsh
+        env:
+          WINDOWS_CODESIGN_PFX_BASE64: ${{ secrets.WINDOWS_CODESIGN_PFX_BASE64 }}
+          WINDOWS_CODESIGN_PFX_PASSWORD: ${{ secrets.WINDOWS_CODESIGN_PFX_PASSWORD }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CODESIGN_PFX_BASE64)) { throw 'PFX mancante' }
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CODESIGN_PFX_PASSWORD)) { throw 'Password PFX mancante' }
+          $pfx = Join-Path $env:RUNNER_TEMP 'riflessa-codesign.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CODESIGN_PFX_BASE64))
+          $flags = [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet
+          $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($pfx, $env:WINDOWS_CODESIGN_PFX_PASSWORD, $flags)
+          if (-not $cert.HasPrivateKey) { throw 'PFX senza chiave privata' }
+          if ($cert.Subject -ne 'CN=Riflessa Hair & Beauty') { throw "Certificato inatteso: $($cert.Subject)" }
+          "CODESIGN_PFX_PATH=$pfx" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          "CODESIGN_THUMBPRINT=$($cert.Thumbprint)" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Genera Portable e NSIS firmati
+        shell: pwsh
+        working-directory: source/${{ env.APP_DIR }}
+        env:
+          WINDOWS_CODESIGN_PFX_PASSWORD: ${{ secrets.WINDOWS_CODESIGN_PFX_PASSWORD }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:CSC_LINK = $env:CODESIGN_PFX_PATH
+          $env:CSC_KEY_PASSWORD = $env:WINDOWS_CODESIGN_PFX_PASSWORD
+          Remove-Item Env:CSC_IDENTITY_AUTO_DISCOVERY -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path release-out | Out-Null
+
+          npx electron-builder --win portable --x64 --publish never
+          if ($LASTEXITCODE -ne 0) { throw 'Build Portable fallita' }
+          $portable = @(Get-ChildItem dist -Filter 'RiflessaRegistratore-Setup-*.exe' -File)
+          if ($portable.Count -ne 1) { throw "Portable non trovata o ambigua: $($portable.Count)" }
+          Move-Item $portable[0].FullName (Join-Path release-out $env:PORTABLE_NAME) -Force
+
+          Remove-Item -Recurse -Force dist\win-unpacked -ErrorAction SilentlyContinue
+          npx electron-builder --win nsis --x64 --publish never
+          if ($LASTEXITCODE -ne 0) { throw 'Build NSIS fallita' }
+
+          "PORTABLE=$((Get-Item (Join-Path 'release-out' $env:PORTABLE_NAME)).FullName)" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          "INSTALLER=$((Get-Item (Join-Path 'dist' $env:INSTALLER_NAME)).FullName)" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          "BLOCKMAP=$((Get-Item (Join-Path 'dist' ($env:INSTALLER_NAME + '.blockmap'))).FullName)" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          "LATEST=$((Get-Item 'dist\latest.yml').FullName)" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Verifica firme
+        shell: pwsh
+        working-directory: source/${{ env.APP_DIR }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($file in @($env:PORTABLE, $env:INSTALLER)) {
+            $sig = Get-AuthenticodeSignature $file
+            if (-not $sig.SignerCertificate) { throw "Non firmato: $file" }
+            if ($sig.SignerCertificate.Subject -ne 'CN=Riflessa Hair & Beauty') { throw "Firmatario inatteso: $file" }
+            if ($sig.SignerCertificate.Thumbprint -ne $env:CODESIGN_THUMBPRINT) { throw "Thumbprint inatteso: $file" }
+          }
+
+      - name: Pubblica release PRIVATA 3.5.11
+        shell: pwsh
+        working-directory: source/${{ env.APP_DIR }}
+        env:
+          GH_TOKEN: ${{ env.SOURCE_PAT }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = 'registratore-v3.5.11'
+          $title = 'Riflessa Registratore v3.5.11'
+          $notes = "Build Windows firmata. Portable + installer NSIS + blockmap + latest.yml. Commit sorgente: $env:SOURCE_SHA"
+          $assets = @($env:PORTABLE, $env:INSTALLER, $env:BLOCKMAP, $env:LATEST)
+          gh release view $tag --repo $env:SOURCE_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag @assets --clobber --repo $env:SOURCE_REPOSITORY
+          } else {
+            gh release create $tag @assets --repo $env:SOURCE_REPOSITORY --target $env:SOURCE_SHA --title $title --notes $notes
+          }
+          if ($LASTEXITCODE -ne 0) { throw 'Pubblicazione release privata fallita' }
+
+      - name: Elimina certificato temporaneo
+        if: always()
+        shell: pwsh
+        run: |
+          if ($env:CODESIGN_PFX_PATH) { Remove-Item $env:CODESIGN_PFX_PATH -Force -ErrorAction SilentlyContinue }
