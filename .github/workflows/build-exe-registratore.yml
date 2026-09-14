@@ -13,7 +13,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: build-exe-registratore-signing-v3
+  group: build-exe-registratore-signing-v4
   cancel-in-progress: false
 
 env:
@@ -21,7 +21,7 @@ env:
   APP_DIR: riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
   SOURCE_PAT: ${{ secrets.PUBLIC_REPO_TOKEN }}
   GOOGLE_CREDENTIALS_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-  UPDATE_BUCKET: riflessa-15a20.firebasestorage.app
+  FIREBASE_PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID }}
 
 jobs:
   verifica-versione:
@@ -40,6 +40,7 @@ jobs:
           set -euo pipefail
           test -n "$SOURCE_PAT" || { echo '::error::PUBLIC_REPO_TOKEN mancante'; exit 1; }
           test -n "$GOOGLE_CREDENTIALS_JSON" || { echo '::error::FIREBASE_SERVICE_ACCOUNT mancante'; exit 1; }
+          test -n "$FIREBASE_PROJECT_ID" || { echo '::error::FIREBASE_PROJECT_ID mancante'; exit 1; }
 
       - name: Checkout sorgente privato
         uses: actions/checkout@v4
@@ -51,7 +52,16 @@ jobs:
           persist-credentials: false
           fetch-depth: 1
 
-      - name: Controlla release privata
+      - name: Autenticazione Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ env.GOOGLE_CREDENTIALS_JSON }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Controlla release privata e canale Firestore Spark
         id: check
         shell: bash
         env:
@@ -71,23 +81,32 @@ jobs:
           echo "installer_name=${INSTALLER}" >> "$GITHUB_OUTPUT"
 
           ASSETS="$(gh release view "$TAG" --repo "$SOURCE_REPOSITORY" --json assets --jq '.assets[].name' 2>/dev/null || true)"
-          COMPLETE=true
+          RELEASE_COMPLETE=true
           for REQUIRED in "$PORTABLE" "$INSTALLER" "$INSTALLER.blockmap" latest.yml; do
-            if ! printf '%s\n' "$ASSETS" | grep -Fxq "$REQUIRED"; then COMPLETE=false; fi
+            if ! printf '%s\n' "$ASSETS" | grep -Fxq "$REQUIRED"; then RELEASE_COMPLETE=false; fi
           done
-          if [[ "$FORCE_BUILD" == 'true' || "$COMPLETE" != 'true' ]]; then
+
+          TOKEN="$(gcloud auth print-access-token)"
+          FIRESTORE_URL="https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/appUpdateChannels/stable"
+          CURRENT_VERSION="$(curl -sS -H "Authorization: Bearer $TOKEN" "$FIRESTORE_URL" | jq -r '.fields.version.stringValue // empty' || true)"
+          FIRESTORE_READY=false
+          if [[ "$CURRENT_VERSION" == "$VERSION" ]]; then FIRESTORE_READY=true; fi
+
+          echo "Release completa: $RELEASE_COMPLETE"
+          echo "Firestore corrente: ${CURRENT_VERSION:-nessuna}"
+          if [[ "$FORCE_BUILD" == 'true' || "$RELEASE_COMPLETE" != 'true' || "$FIRESTORE_READY" != 'true' ]]; then
             echo 'build=true' >> "$GITHUB_OUTPUT"
           else
             echo 'build=false' >> "$GITHUB_OUTPUT"
-            echo "Release privata $TAG già completa."
+            echo "Release privata $TAG e canale Firestore già completi."
           fi
 
   build-windows:
-    name: Build Windows firmata e update privato
+    name: Build Windows firmata e update privato Spark
     needs: verifica-versione
     if: needs.verifica-versione.outputs.build == 'true'
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 75
     env:
       VERSION: ${{ needs.verifica-versione.outputs.version }}
       SOURCE_SHA: ${{ needs.verifica-versione.outputs.source_sha }}
@@ -192,36 +211,6 @@ jobs:
           if ($yaml -notmatch "version:\s*$([regex]::Escape($env:VERSION))") { throw 'Versione latest.yml inattesa' }
           Write-Host "Installer SHA256: $((Get-FileHash $env:INSTALLER -Algorithm SHA256).Hash)"
 
-      - name: Autenticazione Google Cloud
-        uses: google-github-actions/auth@v2
-        with:
-          credentials_json: ${{ env.GOOGLE_CREDENTIALS_JSON }}
-          create_credentials_file: true
-          export_environment_variables: true
-
-      - uses: google-github-actions/setup-gcloud@v2
-
-      - name: Pubblica update su Storage privato
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $versionBase = "gs://$env:UPDATE_BUCKET/registratore-updates/versions/$env:VERSION"
-          $currentBase = "gs://$env:UPDATE_BUCKET/registratore-updates/current"
-          $uploads = @(
-            @($env:INSTALLER, "$versionBase/$env:INSTALLER_NAME"),
-            @($env:BLOCKMAP, "$versionBase/$env:INSTALLER_NAME.blockmap"),
-            @($env:LATEST, "$versionBase/latest.yml"),
-            @($env:INSTALLER, "$currentBase/$env:INSTALLER_NAME"),
-            @($env:BLOCKMAP, "$currentBase/$env:INSTALLER_NAME.blockmap")
-          )
-          foreach ($pair in $uploads) {
-            & gcloud storage cp $pair[0] $pair[1]
-            if ($LASTEXITCODE -ne 0) { throw "Upload fallito: $($pair[1])" }
-          }
-          # latest.yml sempre ultimo: niente metadata anticipati rispetto ai binari.
-          & gcloud storage cp $env:LATEST "$currentBase/latest.yml"
-          if ($LASTEXITCODE -ne 0) { throw 'Upload latest.yml fallito' }
-
       - name: Pubblica release PRIVATA completa
         shell: pwsh
         working-directory: source/${{ env.APP_DIR }}
@@ -231,7 +220,7 @@ jobs:
           $ErrorActionPreference = 'Continue'
           $tag = "registratore-v$env:VERSION"
           $title = "Riflessa Registratore v$env:VERSION"
-          $notes = "Build Windows firmata. Portable + NSIS + metadata auto-update privati. Commit sorgente: $env:SOURCE_SHA"
+          $notes = "Build Windows firmata. Portable + NSIS + metadata auto-update privati Firestore/Spark. Commit sorgente: $env:SOURCE_SHA"
           $assets = @($env:PORTABLE, $env:INSTALLER, $env:BLOCKMAP, $env:LATEST)
           gh release view $tag --repo $env:SOURCE_REPOSITORY *> $null
           if ($LASTEXITCODE -eq 0) {
@@ -241,10 +230,32 @@ jobs:
           }
           if ($LASTEXITCODE -ne 0) { throw 'Pubblicazione release privata fallita' }
 
+      - name: Autenticazione Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ env.GOOGLE_CREDENTIALS_JSON }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Pubblica update su Firestore Spark
+        shell: pwsh
+        working-directory: source/${{ env.APP_DIR }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $token = (& gcloud auth print-access-token).Trim()
+          if ([string]::IsNullOrWhiteSpace($token)) { throw 'Access token Google mancante' }
+          $env:FIRESTORE_ACCESS_TOKEN = $token
+          try {
+            node scripts/publish-update-firestore.cjs
+            if ($LASTEXITCODE -ne 0) { throw 'Pubblicazione Firestore update fallita' }
+          } finally {
+            Remove-Item Env:FIRESTORE_ACCESS_TOKEN -ErrorAction SilentlyContinue
+          }
+
       - name: Elimina certificato temporaneo
         if: always()
         shell: pwsh
         run: |
           if ($env:CODESIGN_PFX_PATH) { Remove-Item $env:CODESIGN_PFX_PATH -Force -ErrorAction SilentlyContinue }
-
-# trigger privato 3.5.11 - 2026-09-14
