@@ -118,3 +118,5 @@ jobs:
             exit 1
           fi
           echo "Firestore Rules attive: $RULESET"
+
+# retry dopo aggiornamento test legacy Storage -> Firestore
