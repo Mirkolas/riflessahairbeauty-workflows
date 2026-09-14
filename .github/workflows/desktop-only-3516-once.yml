@@ -41,7 +41,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          npx --yes firebase-tools@13.20.0 hosting:disable --project "$PROJECT_ID" --non-interactive
+          npx --yes firebase-tools@13.20.0 hosting:disable --project "$PROJECT_ID" --non-interactive --force
 
       - name: Verifica rimozione app dal browser
         shell: bash
