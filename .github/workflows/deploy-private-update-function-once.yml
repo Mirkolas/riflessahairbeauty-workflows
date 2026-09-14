@@ -1,0 +1,89 @@
+name: Deploy auto update privato una tantum
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/deploy-private-update-function-once.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SOURCE_REPOSITORY: Mirkolas/riflessahairbeauty
+      SOURCE_PAT: ${{ secrets.PUBLIC_REPO_TOKEN }}
+      GOOGLE_CREDENTIALS_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+      PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID }}
+      APP_DIR: riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
+    steps:
+      - name: Verifica configurazione
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$SOURCE_PAT" || { echo '::error::PUBLIC_REPO_TOKEN mancante'; exit 1; }
+          test -n "$GOOGLE_CREDENTIALS_JSON" || { echo '::error::FIREBASE_SERVICE_ACCOUNT mancante'; exit 1; }
+          test -n "$PROJECT_ID" || { echo '::error::FIREBASE_PROJECT_ID mancante'; exit 1; }
+
+      - name: Checkout sorgente privato
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          ref: main
+          token: ${{ env.SOURCE_PAT }}
+          path: source
+          persist-credentials: false
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Verifica 3.5.11 e prepara funzione
+        shell: bash
+        working-directory: source/${{ env.APP_DIR }}
+        run: |
+          set -euo pipefail
+          test "$(node -p "require('./package.json').version")" = '3.5.11'
+          npm ci --no-audit --no-fund
+          npm ci --prefix functions --no-audit --no-fund
+          npm test
+          node -c functions/index.js
+          ENCODED="$(printf '%s' "$GOOGLE_CREDENTIALS_JSON" | base64 -w0)"
+          printf 'UPDATE_SIGNER_SERVICE_ACCOUNT_B64=%s\n' "$ENCODED" > functions/.env
+          chmod 600 functions/.env
+
+      - name: Autenticazione Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ env.GOOGLE_CREDENTIALS_JSON }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Deploy funzione privata
+        shell: bash
+        working-directory: source/${{ env.APP_DIR }}
+        run: |
+          set -euo pipefail
+          ./node_modules/.bin/firebase deploy --project "$PROJECT_ID" --only functions:privateUpdates --non-interactive
+
+      - name: Verifica protezione endpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          URL="https://europe-west1-${PROJECT_ID}.cloudfunctions.net/privateUpdates/latest.yml"
+          CODE="$(curl -sS -o /tmp/private-update-check.txt -w '%{http_code}' "$URL")"
+          if [[ "$CODE" != '401' ]]; then
+            cat /tmp/private-update-check.txt
+            echo "::error::Endpoint non protetto come atteso: HTTP $CODE"
+            exit 1
+          fi
+          echo 'Endpoint privato attivo: richiesta senza Firebase ID token respinta con HTTP 401.'
+
+      - name: Elimina env temporanea
+        if: always()
+        shell: bash
+        run: rm -f "source/${APP_DIR}/functions/.env"
