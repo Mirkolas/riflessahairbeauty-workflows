@@ -33,7 +33,7 @@ jobs:
 
       - uses: google-github-actions/setup-gcloud@v2
 
-      - name: Elenca bucket e localizzazione
+      - name: Elenca bucket localizzazione e billing
         shell: bash
         run: |
           set -u
@@ -43,3 +43,5 @@ jobs:
           gcloud firestore databases describe --project "$PROJECT_ID" --database='(default)' --format='yaml(name,locationId,type)' || true
           echo '=== PROJECT ==='
           gcloud projects describe "$PROJECT_ID" --format='yaml(projectId,projectNumber)' || true
+          echo '=== BILLING ==='
+          gcloud beta billing projects describe "$PROJECT_ID" --format='yaml(billingAccountName,billingEnabled,name,projectId)' || true
