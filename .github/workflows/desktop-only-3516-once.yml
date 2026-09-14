@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: read
+  actions: write
 
 env:
   PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID }}
@@ -30,20 +31,7 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Autenticazione Google Cloud
-        uses: google-github-actions/auth@v2
-        with:
-          credentials_json: ${{ env.GOOGLE_CREDENTIALS_JSON }}
-          create_credentials_file: true
-          export_environment_variables: true
-
-      - name: Spegni Firebase Hosting del registratore
-        shell: bash
-        run: |
-          set -euo pipefail
-          npx --yes firebase-tools@13.20.0 hosting:disable --project "$PROJECT_ID" --non-interactive --force
-
-      - name: Verifica rimozione app dal browser
+      - name: Verifica che Hosting resti spento
         shell: bash
         run: |
           set -euo pipefail
@@ -77,6 +65,21 @@ jobs:
           set -euo pipefail
           python3 scripts/harden-desktop-3516.py "source/${APP_DIR}"
           cd "source/${APP_DIR}"
+
+          # Mantiene la forma ASAR storica; electron-builder incorpora comunque
+          # l'hash di integrita per default, mentre i fuse ne impongono la verifica.
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path('package.json')
+          pkg=json.loads(p.read_text(encoding='utf-8'))
+          pkg['build']['asar']=True
+          p.write_text(json.dumps(pkg, indent=2, ensure_ascii=False)+'\n', encoding='utf-8')
+          t=Path('tests/desktop-only-security-v3516.test.js')
+          s=t.read_text(encoding='utf-8').replace("assert.equal(pkg.build?.asar?.disableIntegrity, false);", "assert.equal(pkg.build?.asar, true);")
+          t.write_text(s, encoding='utf-8')
+          PY
+
           CURRENT="$(node -p "require('./package.json').version")"
           if [[ "$CURRENT" == "3.5.15" ]]; then
             npm version 3.5.16 --no-git-tag-version
@@ -85,6 +88,9 @@ jobs:
             exit 1
           fi
           npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+          test "$(node -p "require('./package.json').version")" = "3.5.16"
+          test "$(node -p "require('./package-lock.json').version")" = "3.5.16"
+          test "$(node -p "require('./package-lock.json').packages[''].version")" = "3.5.16"
 
       - name: Test completi e preflight
         working-directory: source/${{ env.APP_DIR }}
@@ -114,6 +120,7 @@ jobs:
           done <<< "$CHANGED"
           ! grep -E 'RIFLESSA_HOSTED_UI|HOSTED_POS|riflessa-15a20\.web\.app' "${APP_DIR}/electron/main.js"
           grep -Fq 'isTrustedRendererUrl' "${APP_DIR}/electron/main.js"
+          grep -Fq 'closeDevTools' "${APP_DIR}/electron/main.js"
           grep -Fq 'onlyLoadAppFromAsar' "${APP_DIR}/package.json"
           ! grep -Fq '"hosting"' "${APP_DIR}/firebase.json"
           if printf '%s\n' "$CHANGED" | grep -E '/electron/axon/|/firestore\.rules$|/js/app\.js$|/js/final-safety\.js$|/js/final-day-guard\.js$'; then
@@ -130,3 +137,11 @@ jobs:
           git add "${APP_DIR}/electron/main.js" "${APP_DIR}/package.json" "${APP_DIR}/package-lock.json" "${APP_DIR}/firebase.json" "${APP_DIR}/.firebaserc" "${APP_DIR}/scripts/check-project.js" "${APP_DIR}/tests/desktop-only-security-v3516.test.js" "${APP_DIR}/VERSIONE_3_5_16_DESKTOP_ONLY.txt"
           git commit -m "Rende il registratore desktop-only 3.5.16"
           git push origin HEAD:main
+
+      - name: Avvia build firmata privata 3.5.16
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh workflow run build-exe-registratore.yml --repo Mirkolas/riflessahairbeauty-workflows
