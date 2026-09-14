@@ -81,12 +81,12 @@ jobs:
           create_credentials_file: true
           export_environment_variables: true
 
-      - name: Deploy Hosting, Firestore e Storage Rules
+      - name: Deploy Hosting e Firestore Rules (piano Spark)
         working-directory: app/riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
         shell: bash
         run: |
           set -euo pipefail
           ./node_modules/.bin/firebase deploy \
             --project "${PROJECT_ID}" \
-            --only "firestore:rules,storage,hosting:${HOSTING_TARGET}" \
+            --only "firestore:rules,hosting:${HOSTING_TARGET}" \
             --non-interactive
