@@ -135,7 +135,7 @@ css_block = r'''
 '''
 css_text = css.read_text(encoding='utf-8')
 if css_marker not in css_text:
-    css.write_text(css_text.rstrip() + css_block + '\n', encoding='utf-8')
+    css.write_text(css_text.rstrip() + css_block.rstrip() + '\n', encoding='utf-8')
 
 test_content = '''const test = require('node:test');
 const assert = require('node:assert/strict');
