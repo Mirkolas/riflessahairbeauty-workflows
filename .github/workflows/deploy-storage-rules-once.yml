@@ -1,0 +1,62 @@
+name: Deploy Storage rules private una tantum
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/deploy-storage-rules-once.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID }}
+      SOURCE_REPOSITORY: Mirkolas/riflessahairbeauty
+      SOURCE_PAT: ${{ secrets.PUBLIC_REPO_TOKEN }}
+      GOOGLE_CREDENTIALS_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+      APP_DIR: riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
+    steps:
+      - name: Verifica configurazione
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$PROJECT_ID"
+          test -n "$SOURCE_PAT"
+          test -n "$GOOGLE_CREDENTIALS_JSON"
+
+      - name: Checkout applicazione privata
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          ref: main
+          token: ${{ env.SOURCE_PAT }}
+          path: app
+          persist-credentials: false
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Installa Firebase CLI
+        working-directory: app/${{ env.APP_DIR }}
+        shell: bash
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Autenticazione Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ env.GOOGLE_CREDENTIALS_JSON }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Deploy Storage Rules
+        working-directory: app/${{ env.APP_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./node_modules/.bin/firebase deploy --project "$PROJECT_ID" --only storage --non-interactive
