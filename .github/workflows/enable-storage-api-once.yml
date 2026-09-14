@@ -1,0 +1,46 @@
+name: Abilita Firebase Storage API una tantum
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/enable-storage-api-once.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  enable:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID }}
+      PROJECT_NUMBER: '379512880769'
+      GOOGLE_CREDENTIALS_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+    steps:
+      - name: Autenticazione Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ env.GOOGLE_CREDENTIALS_JSON }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Abilita API via Service Usage
+        shell: bash
+        run: |
+          set -euo pipefail
+          TOKEN="$(gcloud auth print-access-token)"
+          URL="https://serviceusage.googleapis.com/v1/projects/$PROJECT_NUMBER/services/firebasestorage.googleapis.com:enable"
+          CODE="$(curl -sS -o "$RUNNER_TEMP/enable.json" -w '%{http_code}' -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -X POST -d '{}' "$URL")"
+          cat "$RUNNER_TEMP/enable.json"
+          if [[ "$CODE" != '200' ]]; then
+            echo "::error::Enable API fallito HTTP $CODE"
+            exit 1
+          fi
+          sleep 20
+          CHECK="$(curl -sS -o "$RUNNER_TEMP/check.json" -w '%{http_code}' -H "Authorization: Bearer $TOKEN" "https://firebasestorage.googleapis.com/v1alpha/projects/$PROJECT_ID/defaultBucket")"
+          echo "Firebase Storage check HTTP $CHECK"
+          cat "$RUNNER_TEMP/check.json"
+          [[ "$CHECK" == '200' || "$CHECK" == '404' ]]
