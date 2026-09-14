@@ -1,0 +1,109 @@
+name: Allinea protocollo G100 v5.9 una tantum
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/patch-g100-v59-once.yml'
+      - '.github/scripts/patch-g100-v59.cjs'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: patch-g100-v59-once
+  cancel-in-progress: false
+
+env:
+  SOURCE_REPOSITORY: Mirkolas/riflessahairbeauty
+  APP_DIR: riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
+  SOURCE_PAT: ${{ secrets.PUBLIC_REPO_TOKEN }}
+
+jobs:
+  patch-test-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout tools pubblici
+        uses: actions/checkout@v4
+        with:
+          path: tools
+
+      - name: Verifica token sorgente
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$SOURCE_PAT" || { echo '::error::PUBLIC_REPO_TOKEN mancante'; exit 1; }
+
+      - name: Checkout sorgente privata
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          ref: main
+          token: ${{ env.SOURCE_PAT }}
+          path: source
+          persist-credentials: true
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Verifica versione iniziale
+        working-directory: source/${{ env.APP_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(node -p "require('./package.json').version")" = '3.5.9' || { echo '::error::Versione iniziale diversa da 3.5.9'; exit 1; }
+
+      - name: Applica correzioni protocollo v5.9
+        shell: bash
+        run: |
+          set -euo pipefail
+          node tools/.github/scripts/patch-g100-v59.cjs "source/${APP_DIR}"
+          cd "source/${APP_DIR}"
+          npm version 3.5.10 --no-git-tag-version
+
+      - name: Installa dipendenze
+        working-directory: source/${{ env.APP_DIR }}
+        run: npm ci --no-audit --no-fund
+
+      - name: Test completi
+        working-directory: source/${{ env.APP_DIR }}
+        run: npm test
+
+      - name: Verifica progetto
+        working-directory: source/${{ env.APP_DIR }}
+        run: npm run check
+
+      - name: Verifica sintassi e diff
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="source/${APP_DIR}"
+          node --check "$APP/electron/axon/fiscal.js"
+          node --check "$APP/electron/main.js"
+          node --check "$APP/tests/vendor-protocol-v59.test.js"
+          git -C source diff --check
+          git -C source diff --stat
+
+      - name: Commit e push sorgente 3.5.10
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -C source config user.name 'github-actions[bot]'
+          git -C source config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git -C source add "${APP_DIR}"
+          git -C source diff --cached --quiet && { echo '::error::Nessuna modifica da pubblicare'; exit 1; }
+          git -C source commit -m 'Allinea protocollo ufficiale G100 v5.9 registratore 3.5.10'
+          git -C source push origin HEAD:main
+
+      - name: Avvia release auto-update 3.5.10
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run release-auto-update-registratore.yml --repo "$GITHUB_REPOSITORY" --ref main
