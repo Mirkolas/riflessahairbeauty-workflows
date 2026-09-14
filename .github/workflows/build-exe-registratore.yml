@@ -154,7 +154,7 @@ jobs:
           $env:CSC_KEY_PASSWORD = $env:WINDOWS_CODESIGN_PFX_PASSWORD
           Remove-Item Env:CSC_IDENTITY_AUTO_DISCOVERY -ErrorAction SilentlyContinue
 
-          npm run portable
+          npm run portable -- --publish never
           if ($LASTEXITCODE -ne 0) { throw "Build Portable fallita" }
 
           $generated = @(Get-ChildItem -Path "dist" -Filter "RiflessaRegistratore-Setup-*.exe" -File)
