@@ -1,6 +1,6 @@
 name: Build EXE - registratore
 
-# Trigger produzione registratore 3.5.5 definitiva
+# Trigger produzione registratore corrente nella release privata
 on:
   schedule:
     - cron: "*/5 * * * *"
