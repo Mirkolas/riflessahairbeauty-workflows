@@ -1,0 +1,90 @@
+name: Finalizza updater privato locale 3.5.11 una tantum
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/finalize-private-updater-3511-once.yml'
+      - '.github/scripts/private-update-local-proxy.py'
+
+permissions:
+  contents: read
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SOURCE_REPOSITORY: Mirkolas/riflessahairbeauty
+      SOURCE_PAT: ${{ secrets.PUBLIC_REPO_TOKEN }}
+      APP_DIR: riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
+    steps:
+      - name: Verifica token privato
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$SOURCE_PAT" || { echo '::error::PUBLIC_REPO_TOKEN mancante'; exit 1; }
+
+      - name: Checkout controllo
+        uses: actions/checkout@v4
+        with:
+          path: control
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Checkout sorgente privato
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          ref: main
+          token: ${{ env.SOURCE_PAT }}
+          path: source
+          persist-credentials: true
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Applica architettura proxy locale
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 control/.github/scripts/private-update-local-proxy.py "source/${APP_DIR}"
+
+      - name: Test completi e preflight
+        shell: bash
+        working-directory: source/${{ env.APP_DIR }}
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+          npm test
+          npm run check
+          node scripts/release-preflight.cjs
+          node -c electron/auto-updater.js
+          test ! -d functions
+          grep -Fq 'storage.rules' firebase.json
+          grep -Fq 'request.auth != null' storage.rules
+
+      - name: Commit atomico sorgente privato
+        shell: bash
+        working-directory: source
+        run: |
+          set -euo pipefail
+          git config user.name 'Mirko'
+          git config user.email 'sonotacamirko@gmail.com'
+          git add -A "$APP_DIR"
+          git diff --cached --check
+          if git diff --cached --quiet; then
+            echo 'Nessuna modifica da committare.'
+          else
+            git commit -m 'Finalizza auto update Firebase Storage privato 3.5.11'
+            git push origin HEAD:main
+          fi
+          echo "SOURCE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Riepilogo
+        shell: bash
+        run: |
+          echo "Sorgente privato finalizzato: $SOURCE_SHA"
+          echo 'La build privata permanente produrrà Portable + NSIS + latest.yml + blockmap.'
