@@ -44,4 +44,4 @@ jobs:
           echo '=== PROJECT ==='
           gcloud projects describe "$PROJECT_ID" --format='yaml(projectId,projectNumber)' || true
           echo '=== BILLING ==='
-          gcloud beta billing projects describe "$PROJECT_ID" --format='yaml(billingAccountName,billingEnabled,name,projectId)' || true
+          gcloud billing projects describe "$PROJECT_ID" --format='yaml(billingAccountName,billingEnabled,name,projectId)' --quiet || true
