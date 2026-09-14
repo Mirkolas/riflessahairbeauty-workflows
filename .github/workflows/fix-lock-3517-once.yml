@@ -1,0 +1,72 @@
+name: Fix package-lock 3.5.17 una tantum
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/fix-lock-3517-once.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  SOURCE_REPOSITORY: Mirkolas/riflessahairbeauty
+  APP_DIR: riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
+  SOURCE_PAT: ${{ secrets.PUBLIC_REPO_TOKEN }}
+
+jobs:
+  fix-lock:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verifica token
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$SOURCE_PAT" || { echo '::error::PUBLIC_REPO_TOKEN mancante'; exit 1; }
+
+      - name: Checkout repo privata
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          ref: main
+          token: ${{ env.SOURCE_PAT }}
+          path: source
+          persist-credentials: true
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Allinea package-lock alla versione applicazione
+        working-directory: source/${{ env.APP_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('fs');
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          const lock = JSON.parse(fs.readFileSync('package-lock.json', 'utf8'));
+          if (pkg.version !== '3.5.17') throw new Error(`Versione package inattesa: ${pkg.version}`);
+          lock.version = pkg.version;
+          if (!lock.packages || !lock.packages['']) throw new Error('Root package mancante nel lockfile');
+          lock.packages[''].version = pkg.version;
+          fs.writeFileSync('package-lock.json', JSON.stringify(lock, null, 2) + '\n', 'utf8');
+          NODE
+          node -e "const p=require('./package.json'),l=require('./package-lock.json'); if(l.version!==p.version||l.packages[''].version!==p.version) process.exit(1); console.log('Versioni allineate:', p.version)"
+
+      - name: Commit correzione nella repo privata
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- "${APP_DIR}/package-lock.json"; then
+            echo 'package-lock già allineato; nessuna modifica necessaria.'
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- "${APP_DIR}/package-lock.json"
+          git commit -m "Allinea package-lock alla versione 3.5.17"
+          git push origin HEAD:main
