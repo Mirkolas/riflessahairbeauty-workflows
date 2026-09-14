@@ -30,7 +30,6 @@ jobs:
     name: Deploy Firebase registratore
     runs-on: ubuntu-latest
     timeout-minutes: 30
-
     steps:
       - name: Verifica configurazione protetta
         shell: bash
@@ -38,7 +37,7 @@ jobs:
           set -euo pipefail
           [[ -n "${PROJECT_ID}" ]] || { echo "::error::Manca la Variable FIREBASE_PROJECT_ID."; exit 1; }
           [[ "${HOSTING_TARGET}" == "registratore" ]] || { echo "::error::FIREBASE_HOSTING_TARGET deve essere registratore."; exit 1; }
-          [[ -n "${SOURCE_PAT}" ]] || { echo "::error::Manca il Secret PUBLIC_REPO_TOKEN nella repository che esegue il workflow."; exit 1; }
+          [[ -n "${SOURCE_PAT}" ]] || { echo "::error::Manca il Secret PUBLIC_REPO_TOKEN."; exit 1; }
           [[ -n "${GOOGLE_CREDENTIALS_JSON}" ]] || { echo "::error::Manca il Secret FIREBASE_SERVICE_ACCOUNT."; exit 1; }
 
       - name: Determina ref applicazione
@@ -50,7 +49,7 @@ jobs:
         run: |
           set -euo pipefail
           REF="${MANUAL_REF:-${DISPATCH_REF:-main}}"
-          echo "ref=${REF}" >> "${GITHUB_OUTPUT}"
+          echo "ref=${REF}" >> "$GITHUB_OUTPUT"
 
       - name: Checkout applicazione
         uses: actions/checkout@v4
@@ -62,25 +61,18 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Configura Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: '22'
 
-      - name: Installa dipendenze
+      - name: Installa dipendenze e verifica
         working-directory: app/riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
         shell: bash
-        run: npm install --ignore-scripts --no-audit --no-fund
-
-      - name: Esegui test
-        working-directory: app/riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
-        shell: bash
-        run: npm test
-
-      - name: Verifica progetto
-        working-directory: app/riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
-        shell: bash
-        run: npm run check
+        run: |
+          set -euo pipefail
+          npm install --ignore-scripts --no-audit --no-fund
+          npm test
+          npm run check
 
       - name: Autenticazione Google Cloud
         uses: google-github-actions/auth@v2
@@ -89,12 +81,12 @@ jobs:
           create_credentials_file: true
           export_environment_variables: true
 
-      - name: Deploy Hosting e Firestore Rules registratore
+      - name: Deploy Hosting, Firestore e Storage Rules
         working-directory: app/riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
         shell: bash
         run: |
           set -euo pipefail
           ./node_modules/.bin/firebase deploy \
             --project "${PROJECT_ID}" \
-            --only "firestore:rules,hosting:${HOSTING_TARGET}" \
+            --only "firestore:rules,storage,hosting:${HOSTING_TARGET}" \
             --non-interactive
