@@ -1,0 +1,120 @@
+name: Finalizza Firestore Spark 3.5.12 una tantum
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/finalize-firestore-spark-3512-once.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID }}
+      SOURCE_REPOSITORY: Mirkolas/riflessahairbeauty
+      SOURCE_PAT: ${{ secrets.PUBLIC_REPO_TOKEN }}
+      GOOGLE_CREDENTIALS_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+      APP_DIR: riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
+    steps:
+      - name: Checkout applicazione privata
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          ref: main
+          token: ${{ env.SOURCE_PAT }}
+          path: app
+          persist-credentials: true
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Aggiunge regole update e aggiorna lock
+        working-directory: app/${{ env.APP_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs=require('fs');
+          const file='firestore.rules';
+          let s=fs.readFileSync(file,'utf8');
+          if(!s.includes('match /appUpdateChannels/{channel}')) {
+            const marker='    match /_backupChanges/{id} {';
+            const block=`    // Canale auto-update privato: i client autenticati staff/admin possono solo leggere.\n    // Le scritture sono eseguite esclusivamente dalla CI con credenziali server.\n    match /appUpdateChannels/{channel} {\n      allow read: if isStaff();\n      allow create, update, delete: if false;\n\n      match /chunks/{chunkId} {\n        allow read: if isStaff();\n        allow create, update, delete: if false;\n      }\n    }\n\n`;
+            if(!s.includes(marker)) throw new Error('Marker _backupChanges non trovato');
+            s=s.replace(marker, block+marker);
+            fs.writeFileSync(file,s,'utf8');
+          }
+          NODE
+          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+          test "$(node -p "require('./package-lock.json').version")" = '3.5.12'
+          test "$(node -p "require('./package-lock.json').packages[''].version")" = '3.5.12'
+
+      - name: Test completi
+        working-directory: app/${{ env.APP_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm test
+          npm run check
+
+      - name: Commit sorgente 3.5.12
+        working-directory: app
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Mirko'
+          git config user.email 'sonotacamirko@gmail.com'
+          git add "${APP_DIR}/package-lock.json" "${APP_DIR}/firestore.rules"
+          if git diff --cached --quiet; then
+            echo 'Nessuna modifica da committare.'
+          else
+            git commit -m 'Finalizza auto update Firestore Spark 3.5.12'
+            git push origin HEAD:main
+          fi
+
+      - name: Autenticazione Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ env.GOOGLE_CREDENTIALS_JSON }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Pubblica Firestore Rules via API diretta
+        working-directory: app/${{ env.APP_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TOKEN="$(gcloud auth print-access-token)"
+          jq -n --rawfile content firestore.rules '{source:{files:[{name:"firestore.rules",content:$content}]}}' > "$RUNNER_TEMP/firestore-ruleset.json"
+          curl -fsS \
+            -H "Authorization: Bearer $TOKEN" \
+            -H 'Content-Type: application/json' \
+            -X POST \
+            -d @"$RUNNER_TEMP/firestore-ruleset.json" \
+            "https://firebaserules.googleapis.com/v1/projects/$PROJECT_ID/rulesets" \
+            > "$RUNNER_TEMP/ruleset-response.json"
+          RULESET="$(jq -r '.name // empty' "$RUNNER_TEMP/ruleset-response.json")"
+          test -n "$RULESET" || { cat "$RUNNER_TEMP/ruleset-response.json"; exit 1; }
+          RELEASE_NAME="projects/$PROJECT_ID/releases/cloud.firestore"
+          jq -n --arg ruleset "$RULESET" '{rulesetName:$ruleset}' > "$RUNNER_TEMP/release-patch.json"
+          CODE="$(curl -sS -o "$RUNNER_TEMP/release-response.json" -w '%{http_code}' \
+            -H "Authorization: Bearer $TOKEN" \
+            -H 'Content-Type: application/json' \
+            -X PATCH \
+            -d @"$RUNNER_TEMP/release-patch.json" \
+            "https://firebaserules.googleapis.com/v1/$RELEASE_NAME?updateMask=rulesetName")"
+          if [[ "$CODE" != '200' ]]; then
+            cat "$RUNNER_TEMP/release-response.json"
+            echo "::error::Deploy Firestore Rules HTTP $CODE"
+            exit 1
+          fi
+          echo "Firestore Rules attive: $RULESET"
