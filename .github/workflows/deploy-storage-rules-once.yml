@@ -19,6 +19,7 @@ jobs:
       SOURCE_PAT: ${{ secrets.PUBLIC_REPO_TOKEN }}
       GOOGLE_CREDENTIALS_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
       APP_DIR: riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
+      UPDATE_BUCKET: riflessa-15a20.firebasestorage.app
     steps:
       - name: Verifica configurazione
         shell: bash
@@ -38,15 +39,6 @@ jobs:
           persist-credentials: false
           fetch-depth: 1
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      - name: Installa Firebase CLI
-        working-directory: app/${{ env.APP_DIR }}
-        shell: bash
-        run: npm ci --ignore-scripts --no-audit --no-fund
-
       - name: Autenticazione Google Cloud
         uses: google-github-actions/auth@v2
         with:
@@ -54,9 +46,65 @@ jobs:
           create_credentials_file: true
           export_environment_variables: true
 
-      - name: Deploy Storage Rules
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Crea e pubblica ruleset Storage via Firebase Rules API
         working-directory: app/${{ env.APP_DIR }}
         shell: bash
         run: |
           set -euo pipefail
-          ./node_modules/.bin/firebase deploy --project "$PROJECT_ID" --only storage --non-interactive
+          TOKEN="$(gcloud auth print-access-token)"
+          jq -n --rawfile content storage.rules \
+            '{source:{files:[{name:"storage.rules",content:$content}]}}' > "$RUNNER_TEMP/storage-ruleset.json"
+
+          curl -fsS \
+            -H "Authorization: Bearer $TOKEN" \
+            -H 'Content-Type: application/json' \
+            -X POST \
+            -d @"$RUNNER_TEMP/storage-ruleset.json" \
+            "https://firebaserules.googleapis.com/v1/projects/$PROJECT_ID/rulesets" \
+            > "$RUNNER_TEMP/ruleset-response.json"
+
+          RULESET="$(jq -r '.name // empty' "$RUNNER_TEMP/ruleset-response.json")"
+          test -n "$RULESET" || { cat "$RUNNER_TEMP/ruleset-response.json"; exit 1; }
+          RELEASE_NAME="projects/$PROJECT_ID/releases/firebase.storage/$UPDATE_BUCKET"
+          jq -n --arg name "$RELEASE_NAME" --arg ruleset "$RULESET" \
+            '{name:$name,rulesetName:$ruleset}' > "$RUNNER_TEMP/release.json"
+
+          CODE="$(curl -sS -o "$RUNNER_TEMP/release-response.json" -w '%{http_code}' \
+            -H "Authorization: Bearer $TOKEN" \
+            -H 'Content-Type: application/json' \
+            -X POST \
+            -d @"$RUNNER_TEMP/release.json" \
+            "https://firebaserules.googleapis.com/v1/projects/$PROJECT_ID/releases")"
+
+          if [[ "$CODE" == '200' || "$CODE" == '201' ]]; then
+            echo "Storage release creata: $RELEASE_NAME"
+          elif [[ "$CODE" == '409' ]]; then
+            jq -n --arg ruleset "$RULESET" '{rulesetName:$ruleset}' > "$RUNNER_TEMP/release-patch.json"
+            curl -fsS \
+              -H "Authorization: Bearer $TOKEN" \
+              -H 'Content-Type: application/json' \
+              -X PATCH \
+              -d @"$RUNNER_TEMP/release-patch.json" \
+              "https://firebaserules.googleapis.com/v1/$RELEASE_NAME?updateMask=rulesetName" \
+              > "$RUNNER_TEMP/release-patch-response.json"
+            echo "Storage release aggiornata: $RELEASE_NAME"
+          else
+            cat "$RUNNER_TEMP/release-response.json"
+            echo "::error::CreateRelease HTTP $CODE"
+            exit 1
+          fi
+
+      - name: Verifica release Storage attiva
+        shell: bash
+        run: |
+          set -euo pipefail
+          TOKEN="$(gcloud auth print-access-token)"
+          RELEASE_NAME="projects/$PROJECT_ID/releases/firebase.storage/$UPDATE_BUCKET"
+          curl -fsS \
+            -H "Authorization: Bearer $TOKEN" \
+            "https://firebaserules.googleapis.com/v1/$RELEASE_NAME" \
+            > "$RUNNER_TEMP/storage-release-check.json"
+          jq -e '.rulesetName | length > 0' "$RUNNER_TEMP/storage-release-check.json" >/dev/null
+          echo "Regole Storage attive su $UPDATE_BUCKET"
