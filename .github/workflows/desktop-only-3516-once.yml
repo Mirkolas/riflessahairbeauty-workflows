@@ -1,0 +1,132 @@
+name: Desktop-only registratore 3.5.16 una tantum
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/desktop-only-3516-once.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID }}
+  SOURCE_REPOSITORY: Mirkolas/riflessahairbeauty
+  APP_DIR: riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
+  GOOGLE_CREDENTIALS_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+
+jobs:
+  desktop-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout workflow
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Autenticazione Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ env.GOOGLE_CREDENTIALS_JSON }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Spegni Firebase Hosting del registratore
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx --yes firebase-tools@13.20.0 hosting:disable --project "$PROJECT_ID" --non-interactive
+
+      - name: Verifica rimozione app dal browser
+        shell: bash
+        run: |
+          set -euo pipefail
+          bad=0
+          for host in "${PROJECT_ID}.web.app" "${PROJECT_ID}.firebaseapp.com"; do
+            for route in / /index.html /js/app.js /js/firebase-config.js /styles.css; do
+              tmp="$(mktemp)"
+              code="$(curl -sS -L --max-time 15 -o "$tmp" -w '%{http_code}' "https://${host}${route}" || true)"
+              echo "${host}${route} -> ${code:-errore}"
+              if [[ "$code" == "200" ]] && grep -Eqi 'Riflessa Hair|firebaseConfig|initializeApp|view-pos|Riflessabeautyapp' "$tmp"; then
+                echo "::error::Contenuto applicativo ancora pubblico su https://${host}${route}"
+                bad=1
+              fi
+              rm -f "$tmp"
+            done
+          done
+          test "$bad" -eq 0
+
+      - name: Checkout sorgente privato
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          ref: main
+          token: ${{ secrets.PUBLIC_REPO_TOKEN }}
+          path: source
+          fetch-depth: 0
+
+      - name: Applica hardening desktop-only 3.5.16
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/harden-desktop-3516.py "source/${APP_DIR}"
+          cd "source/${APP_DIR}"
+          CURRENT="$(node -p "require('./package.json').version")"
+          if [[ "$CURRENT" == "3.5.15" ]]; then
+            npm version 3.5.16 --no-git-tag-version
+          elif [[ "$CURRENT" != "3.5.16" ]]; then
+            echo "::error::Versione sorgente inattesa: $CURRENT"
+            exit 1
+          fi
+          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+
+      - name: Test completi e preflight
+        working-directory: source/${{ env.APP_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+          npm test
+          npm run check
+          node scripts/release-preflight.cjs
+
+      - name: Verifica perimetro hardening
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd source
+          git diff --check
+          CHANGED="$(git status --short | awk '{print $2}')"
+          printf '%s\n' "$CHANGED"
+          test -n "$CHANGED"
+          while IFS= read -r file; do
+            [[ -z "$file" ]] && continue
+            case "$file" in
+              "${APP_DIR}/electron/main.js"|"${APP_DIR}/package.json"|"${APP_DIR}/package-lock.json"|"${APP_DIR}/firebase.json"|"${APP_DIR}/.firebaserc"|"${APP_DIR}/scripts/check-project.js"|"${APP_DIR}/tests/desktop-only-security-v3516.test.js"|"${APP_DIR}/VERSIONE_3_5_16_DESKTOP_ONLY.txt") ;;
+              *) echo "::error::File inatteso modificato: $file"; exit 1 ;;
+            esac
+          done <<< "$CHANGED"
+          ! grep -E 'RIFLESSA_HOSTED_UI|HOSTED_POS|riflessa-15a20\.web\.app' "${APP_DIR}/electron/main.js"
+          grep -Fq 'isTrustedRendererUrl' "${APP_DIR}/electron/main.js"
+          grep -Fq 'onlyLoadAppFromAsar' "${APP_DIR}/package.json"
+          ! grep -Fq '"hosting"' "${APP_DIR}/firebase.json"
+          if printf '%s\n' "$CHANGED" | grep -E '/electron/axon/|/firestore\.rules$|/js/app\.js$|/js/final-safety\.js$|/js/final-day-guard\.js$'; then
+            echo '::error::Modifica fuori perimetro'; exit 1
+          fi
+
+      - name: Pubblica sorgente privato 3.5.16
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd source
+          git config user.name "Riflessa Release Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add "${APP_DIR}/electron/main.js" "${APP_DIR}/package.json" "${APP_DIR}/package-lock.json" "${APP_DIR}/firebase.json" "${APP_DIR}/.firebaserc" "${APP_DIR}/scripts/check-project.js" "${APP_DIR}/tests/desktop-only-security-v3516.test.js" "${APP_DIR}/VERSIONE_3_5_16_DESKTOP_ONLY.txt"
+          git commit -m "Rende il registratore desktop-only 3.5.16"
+          git push origin HEAD:main
