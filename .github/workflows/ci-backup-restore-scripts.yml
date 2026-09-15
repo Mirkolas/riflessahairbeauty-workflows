@@ -1,55 +1,68 @@
-name: CI backup e restore registratore
+name: CI workflow e script registratore
 
 on:
   push:
     paths:
-      - 'scripts/backup-registratore-v3.cjs'
-      - 'scripts/ripristino-registratore.cjs'
-      - 'scripts/verifica-backup-registratore.cjs'
-      - 'scripts/pulisci-journal-backup.cjs'
-      - '.github/workflows/firebase-backup-registratore.yml'
-      - '.github/workflows/firebase-ripristino-registratore.yml'
-      - '.github/workflows/firebase-test-restore-registratore.yml'
-      - '.github/workflows/firebase-test-restore-emulator-registratore.yml'
-      - '.github/workflows/ci-backup-restore-scripts.yml'
+      - 'scripts/**'
+      - '.github/scripts/**'
+      - '.github/workflows/**'
   pull_request:
     paths:
       - 'scripts/**'
+      - '.github/scripts/**'
       - '.github/workflows/**'
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-workflow-registratore-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   syntax:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 2
+
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      - name: Controlla sintassi Node
+
+      - name: Controlla sintassi Node di tutti gli script
+        shell: bash
         run: |
           set -euo pipefail
-          node --check scripts/backup-registratore-v3.cjs
-          node --check scripts/ripristino-registratore.cjs
-          node --check scripts/verifica-backup-registratore.cjs
-          node --check scripts/pulisci-journal-backup.cjs
-      - name: Controlla YAML workflow
+          while IFS= read -r -d '' file; do
+            echo "Controllo ${file}"
+            node --check "${file}"
+          done < <(find scripts -type f \( -name '*.cjs' -o -name '*.js' \) -print0 | sort -z)
+
+      - name: Controlla sintassi Python degli script GitHub
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -d '' FILES < <(find .github/scripts -type f -name '*.py' -print0 2>/dev/null || true)
+          if (( ${#FILES[@]} > 0 )); then
+            python3 -m py_compile "${FILES[@]}"
+          fi
+
+      - name: Controlla tutti i YAML workflow
         shell: ruby {0}
         run: |
           require 'yaml'
-          %w[
-            .github/workflows/firebase-backup-registratore.yml
-            .github/workflows/firebase-ripristino-registratore.yml
-            .github/workflows/firebase-test-restore-registratore.yml
-            .github/workflows/firebase-test-restore-emulator-registratore.yml
-            .github/workflows/ci-backup-restore-scripts.yml
-          ].each do |file|
+          files = Dir['.github/workflows/*.{yml,yaml}'].sort
+          abort 'Nessun workflow trovato' if files.empty?
+          files.each do |file|
             YAML.load_file(file, aliases: true)
             puts "OK #{file}"
           end
+
       - name: Controlla whitespace
-        run: git diff --check HEAD^ HEAD
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check HEAD^ HEAD
