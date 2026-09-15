@@ -1,4 +1,4 @@
-name: Release 3.5.19 splash - one shot
+name: Hotfix verifica release 3.5.19 - one shot
 
 on:
   push:
@@ -8,235 +8,65 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   actions: write
 
-env:
-  SOURCE_REPOSITORY: Mirkolas/riflessahairbeauty
-  APP_DIR: riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
-  SOURCE_PAT: ${{ secrets.PUBLIC_REPO_TOKEN }}
-
 jobs:
-  aggiorna:
+  hotfix:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 10
     steps:
-      - name: Verifica configurazione
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -n "$SOURCE_PAT" || { echo '::error::PUBLIC_REPO_TOKEN mancante'; exit 1; }
-
-      - name: Checkout repo privata
+      - name: Checkout workflow pubblici
         uses: actions/checkout@v4
         with:
-          repository: ${{ env.SOURCE_REPOSITORY }}
           ref: main
-          token: ${{ env.SOURCE_PAT }}
-          path: source
           fetch-depth: 1
           persist-credentials: true
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
+      - name: Corregge gestione 404 release
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('.github/workflows/build-exe-registratore.yml')
+          s = p.read_text(encoding='utf-8')
+          old = '''          RELEASE_JSON="$(gh api "repos/${SOURCE_REPOSITORY}/releases/tags/${TAG}" 2>/dev/null || true)"
+          RELEASE_COMPLETE=false
+'''
+          new = '''          RELEASE_JSON=""
+          if RELEASE_RESPONSE="$(gh api "repos/${SOURCE_REPOSITORY}/releases/tags/${TAG}" 2>/dev/null)"; then
+            RELEASE_JSON="$RELEASE_RESPONSE"
+          fi
+          RELEASE_COMPLETE=false
+'''
+          if old not in s:
+              raise SystemExit('Blocco release atteso non trovato: nessuna modifica applicata')
+          s = s.replace(old, new, 1)
+          p.write_text(s, encoding='utf-8')
 
-      - name: Aggiorna splash e versione 3.5.19
-        working-directory: source/${{ env.APP_DIR }}
+      - name: Verifica modifica
         shell: bash
         run: |
           set -euo pipefail
-          CURRENT_SHA="$(git -C ../.. rev-parse HEAD)"
-          [[ "$CURRENT_SHA" == '2f1d2eef6c9675cea5e0617a13fffbde34941a9a' ]] || { echo "::error::Main privata cambiata: $CURRENT_SHA"; exit 1; }
-          [[ "$(node -p "require('./package.json').version")" == '3.5.18' ]] || { echo '::error::Versione sorgente diversa da 3.5.18'; exit 1; }
+          grep -F 'if RELEASE_RESPONSE="$(gh api "repos/${SOURCE_REPOSITORY}/releases/tags/${TAG}" 2>/dev/null)"; then' .github/workflows/build-exe-registratore.yml
+          ruby -e "require 'yaml'; YAML.load_file('.github/workflows/build-exe-registratore.yml', aliases: true); puts 'YAML OK'"
+          git diff --check
 
-          npm version 3.5.19 --no-git-tag-version
-
-          cat > electron/splash.html <<'HTML'
-          <!doctype html>
-          <html lang="it">
-          <head>
-            <meta charset="utf-8">
-            <meta name="viewport" content="width=device-width,initial-scale=1">
-            <title>Avvio Riflessa</title>
-            <style>
-              :root{
-                color-scheme:light;
-                --accent:#ad7446;
-                --accent-warm:#d19a68;
-                --halo:rgba(186,133,84,.24);
-              }
-              *{box-sizing:border-box}
-              html,body{
-                width:100%;
-                height:100%;
-                margin:0;
-                overflow:hidden;
-                background:transparent;
-              }
-              body{
-                display:grid;
-                place-items:center;
-                user-select:none;
-                -webkit-app-region:drag;
-              }
-              .splash-shell{
-                position:relative;
-                width:286px;
-                height:286px;
-                display:grid;
-                place-items:center;
-                filter:drop-shadow(0 18px 34px rgba(35,24,14,.14));
-                animation:splash-enter .48s cubic-bezier(.2,.75,.28,1) both;
-              }
-              .splash-shell::before,
-              .splash-shell::after{
-                content:"";
-                position:absolute;
-                border-radius:50%;
-                pointer-events:none;
-              }
-              .splash-shell::before{
-                inset:0;
-                background:conic-gradient(
-                  from -45deg,
-                  transparent 0 10%,
-                  rgba(172,114,68,.22) 20%,
-                  var(--accent-warm) 37%,
-                  var(--accent) 52%,
-                  rgba(172,114,68,.16) 67%,
-                  transparent 79% 100%
-                );
-                -webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 4px),#000 calc(100% - 3px));
-                mask:radial-gradient(farthest-side,transparent calc(100% - 4px),#000 calc(100% - 3px));
-                animation:ring-rotate 1.45s linear infinite;
-              }
-              .splash-shell::after{
-                inset:10px;
-                border:1px solid rgba(172,114,68,.22);
-                box-shadow:0 0 26px var(--halo);
-              }
-              .splash-panel{
-                position:relative;
-                width:258px;
-                height:258px;
-                padding:7px;
-                border-radius:50%;
-                overflow:hidden;
-                display:grid;
-                place-items:center;
-                background:#fffdf9;
-                border:1px solid rgba(80,51,27,.12);
-                box-shadow:
-                  0 1px 0 rgba(255,255,255,.96) inset,
-                  0 13px 28px rgba(50,32,17,.12);
-              }
-              .logo-wrap{
-                width:244px;
-                height:244px;
-                border-radius:50%;
-                overflow:hidden;
-                display:grid;
-                place-items:center;
-              }
-              .logo-wrap img{
-                display:block;
-                width:100%;
-                height:100%;
-                object-fit:cover;
-                border-radius:50%;
-                filter:drop-shadow(0 4px 10px rgba(55,34,19,.06));
-              }
-              @keyframes ring-rotate{to{transform:rotate(360deg)}}
-              @keyframes splash-enter{
-                from{opacity:0;transform:scale(.965)}
-                to{opacity:1;transform:scale(1)}
-              }
-              @media (prefers-reduced-motion:reduce){
-                .splash-shell,
-                .splash-shell::before{animation:none}
-              }
-            </style>
-          </head>
-          <body>
-            <main class="splash-shell" role="status" aria-label="Riflessa in avvio">
-              <section class="splash-panel" aria-hidden="true">
-                <div class="logo-wrap">
-                  <img src="../assets/riflessa-logo.png" alt="">
-                </div>
-              </section>
-            </main>
-          </body>
-          </html>
-          HTML
-
-          cat > tests/startup-splash.test.js <<'JS'
-          const test = require('node:test');
-          const assert = require('node:assert/strict');
-          const fs = require('node:fs');
-          const path = require('node:path');
-
-          const root = path.join(__dirname, '..');
-          const main = fs.readFileSync(path.join(root, 'electron', 'main.js'), 'utf8');
-          const splash = fs.readFileSync(path.join(root, 'electron', 'splash.html'), 'utf8');
-
-          test('avvio usa splash circolare professionale e mostra la finestra principale solo a caricamento completato', () => {
-            assert.match(main, /createSplashWindow\(\)/);
-            assert.match(main, /show:\s*false/);
-            assert.match(main, /did-finish-load/);
-            assert.match(main, /revealMainWindow/);
-
-            assert.match(splash, /riflessa-logo\.png/);
-            assert.match(splash, /class="splash-shell"/);
-            assert.match(splash, /class="splash-panel"/);
-            assert.match(splash, /class="logo-wrap"/);
-            assert.match(splash, /\.logo-wrap\{[\s\S]*width:244px;[\s\S]*height:244px;[\s\S]*border-radius:50%;[\s\S]*overflow:hidden/);
-            assert.match(splash, /\.logo-wrap img\{[\s\S]*width:100%;[\s\S]*height:100%;[\s\S]*object-fit:cover;[\s\S]*border-radius:50%/);
-            assert.match(splash, /conic-gradient\(/);
-            assert.match(splash, /@keyframes\s+ring-rotate/);
-            assert.match(splash, /prefers-reduced-motion/);
-            assert.doesNotMatch(splash, /Preparazione applicazione/);
-            assert.doesNotMatch(splash, /class="status-dot"|class="product"|class="hair-beauty"|class="loader"|class="track"|class="bar"/);
-          });
-          JS
-
-          test "$(node -p "require('./package.json').version")" = '3.5.19'
-          test "$(node -p "require('./package-lock.json').version")" = '3.5.19'
-          test "$(node -p "require('./package-lock.json').packages[''].version")" = '3.5.19'
-
-      - name: Installa dipendenze e verifica
-        working-directory: source/${{ env.APP_DIR }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          npm ci --no-audit --no-fund
-          npm test
-          npm run check
-          node scripts/release-preflight.cjs
-
-      - name: Commit e push privato
-        working-directory: source
+      - name: Commit e push hotfix
         shell: bash
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -- \
-            "${APP_DIR}/electron/splash.html" \
-            "${APP_DIR}/tests/startup-splash.test.js" \
-            "${APP_DIR}/package.json" \
-            "${APP_DIR}/package-lock.json"
-          git diff --cached --check
-          git commit -m 'Release 3.5.19: splash circolare essenziale'
+          git add .github/workflows/build-exe-registratore.yml
+          git commit -m 'Corregge falso positivo su release GitHub assente'
           git push origin HEAD:main
-          echo "SOURCE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
 
-      - name: Avvia build pubblica 3.5.19
-        continue-on-error: true
+      - name: Avvia build 3.5.19
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
+          set -euo pipefail
           gh workflow run build-exe-registratore.yml \
             --repo Mirkolas/riflessahairbeauty-workflows \
             --ref main
