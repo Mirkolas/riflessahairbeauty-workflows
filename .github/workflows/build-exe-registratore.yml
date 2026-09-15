@@ -66,7 +66,6 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ env.SOURCE_PAT }}
-          FORCE_BUILD: ${{ github.event_name != 'schedule' }}
         run: |
           set -euo pipefail
           cd "source/${APP_DIR}"
@@ -94,7 +93,7 @@ jobs:
 
           echo "Release completa: $RELEASE_COMPLETE"
           echo "Firestore corrente: ${CURRENT_VERSION:-nessuna}"
-          if [[ "$FORCE_BUILD" == 'true' || "$RELEASE_COMPLETE" != 'true' || "$FIRESTORE_READY" != 'true' ]]; then
+          if [[ "$RELEASE_COMPLETE" != 'true' || "$FIRESTORE_READY" != 'true' ]]; then
             echo 'build=true' >> "$GITHUB_OUTPUT"
           else
             echo 'build=false' >> "$GITHUB_OUTPUT"
@@ -133,6 +132,9 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           npm ci --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { throw 'Installazione dipendenze fallita' }
+          npm audit --audit-level=high
+          if ($LASTEXITCODE -ne 0) { throw 'Audit dipendenze: vulnerabilita alta o critica' }
           npm test
           if ($LASTEXITCODE -ne 0) { throw 'Test falliti' }
           npm run check
@@ -209,6 +211,11 @@ jobs:
           if ($yaml -notmatch [regex]::Escape($env:INSTALLER_NAME)) { throw 'latest.yml non punta all installer' }
           if ($yaml -notmatch 'sha512:') { throw 'latest.yml privo di SHA512' }
           if ($yaml -notmatch "version:\s*$([regex]::Escape($env:VERSION))") { throw 'Versione latest.yml inattesa' }
+          $sha512 = [System.Security.Cryptography.SHA512]::Create()
+          $installerStream = [IO.File]::OpenRead($env:INSTALLER)
+          try { $expectedSha512 = [Convert]::ToBase64String($sha512.ComputeHash($installerStream)) }
+          finally { $installerStream.Dispose(); $sha512.Dispose() }
+          if ($yaml -notmatch [regex]::Escape($expectedSha512)) { throw 'SHA512 latest.yml diverso dal contenuto installer' }
           Write-Host "Installer SHA256: $((Get-FileHash $env:INSTALLER -Algorithm SHA256).Hash)"
 
       - name: Pubblica release PRIVATA completa
