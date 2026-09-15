@@ -196,6 +196,7 @@ jobs:
         run: |
           set -euo pipefail
           cd "source/${APP_DIR}"
+          npm ci --no-audit --no-fund
           npm run release:check
           test "$(node -p "require('./package.json').version")" = "3.5.20"
           test "$(node -p "require('./package-lock.json').version")" = "3.5.20"
