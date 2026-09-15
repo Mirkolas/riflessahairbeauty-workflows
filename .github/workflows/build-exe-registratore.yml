@@ -80,7 +80,10 @@ jobs:
           echo "portable_name=${PORTABLE}" >> "$GITHUB_OUTPUT"
           echo "installer_name=${INSTALLER}" >> "$GITHUB_OUTPUT"
 
-          RELEASE_JSON="$(gh api "repos/${SOURCE_REPOSITORY}/releases/tags/${TAG}" 2>/dev/null || true)"
+          RELEASE_JSON=""
+          if RELEASE_RESPONSE="$(gh api "repos/${SOURCE_REPOSITORY}/releases/tags/${TAG}" 2>/dev/null)"; then
+            RELEASE_JSON="$RELEASE_RESPONSE"
+          fi
           RELEASE_COMPLETE=false
           if [[ -n "$RELEASE_JSON" ]]; then
             RELEASE_TARGET="$(jq -r '.target_commitish // empty' <<<"$RELEASE_JSON")"
