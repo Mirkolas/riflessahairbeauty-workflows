@@ -1,0 +1,250 @@
+name: Release 3.5.19 splash - one shot
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/release-3519-splash-once.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+env:
+  SOURCE_REPOSITORY: Mirkolas/riflessahairbeauty
+  APP_DIR: riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
+  SOURCE_PAT: ${{ secrets.PUBLIC_REPO_TOKEN }}
+
+jobs:
+  aggiorna:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Verifica configurazione
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$SOURCE_PAT" || { echo '::error::PUBLIC_REPO_TOKEN mancante'; exit 1; }
+
+      - name: Checkout repo privata
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          ref: main
+          token: ${{ env.SOURCE_PAT }}
+          path: source
+          fetch-depth: 1
+          persist-credentials: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Aggiorna splash e versione 3.5.19
+        working-directory: source/${{ env.APP_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          CURRENT_SHA="$(git -C ../.. rev-parse HEAD)"
+          [[ "$CURRENT_SHA" == '2f1d2eef6c9675cea5e0617a13fffbde34941a9a' ]] || { echo "::error::Main privata cambiata: $CURRENT_SHA"; exit 1; }
+          [[ "$(node -p "require('./package.json').version")" == '3.5.18' ]] || { echo '::error::Versione sorgente diversa da 3.5.18'; exit 1; }
+
+          npm version 3.5.19 --no-git-tag-version
+
+          cat > electron/splash.html <<'HTML'
+          <!doctype html>
+          <html lang="it">
+          <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width,initial-scale=1">
+            <title>Avvio Riflessa</title>
+            <style>
+              :root{
+                color-scheme:light;
+                --accent:#ad7446;
+                --accent-warm:#d19a68;
+                --halo:rgba(186,133,84,.24);
+              }
+              *{box-sizing:border-box}
+              html,body{
+                width:100%;
+                height:100%;
+                margin:0;
+                overflow:hidden;
+                background:transparent;
+              }
+              body{
+                display:grid;
+                place-items:center;
+                user-select:none;
+                -webkit-app-region:drag;
+              }
+              .splash-shell{
+                position:relative;
+                width:286px;
+                height:286px;
+                display:grid;
+                place-items:center;
+                filter:drop-shadow(0 18px 34px rgba(35,24,14,.14));
+                animation:splash-enter .48s cubic-bezier(.2,.75,.28,1) both;
+              }
+              .splash-shell::before,
+              .splash-shell::after{
+                content:"";
+                position:absolute;
+                border-radius:50%;
+                pointer-events:none;
+              }
+              .splash-shell::before{
+                inset:0;
+                background:conic-gradient(
+                  from -45deg,
+                  transparent 0 10%,
+                  rgba(172,114,68,.22) 20%,
+                  var(--accent-warm) 37%,
+                  var(--accent) 52%,
+                  rgba(172,114,68,.16) 67%,
+                  transparent 79% 100%
+                );
+                -webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 4px),#000 calc(100% - 3px));
+                mask:radial-gradient(farthest-side,transparent calc(100% - 4px),#000 calc(100% - 3px));
+                animation:ring-rotate 1.45s linear infinite;
+              }
+              .splash-shell::after{
+                inset:10px;
+                border:1px solid rgba(172,114,68,.22);
+                box-shadow:0 0 26px var(--halo);
+              }
+              .splash-panel{
+                position:relative;
+                width:258px;
+                height:258px;
+                padding:7px;
+                border-radius:50%;
+                overflow:hidden;
+                display:grid;
+                place-items:center;
+                background:#fffdf9;
+                border:1px solid rgba(80,51,27,.12);
+                box-shadow:
+                  0 1px 0 rgba(255,255,255,.96) inset,
+                  0 13px 28px rgba(50,32,17,.12);
+              }
+              .logo-wrap{
+                width:244px;
+                height:244px;
+                border-radius:50%;
+                overflow:hidden;
+                display:grid;
+                place-items:center;
+              }
+              .logo-wrap img{
+                display:block;
+                width:100%;
+                height:100%;
+                object-fit:cover;
+                border-radius:50%;
+                filter:drop-shadow(0 4px 10px rgba(55,34,19,.06));
+              }
+              @keyframes ring-rotate{to{transform:rotate(360deg)}}
+              @keyframes splash-enter{
+                from{opacity:0;transform:scale(.965)}
+                to{opacity:1;transform:scale(1)}
+              }
+              @media (prefers-reduced-motion:reduce){
+                .splash-shell,
+                .splash-shell::before{animation:none}
+              }
+            </style>
+          </head>
+          <body>
+            <main class="splash-shell" role="status" aria-label="Riflessa in avvio">
+              <section class="splash-panel" aria-hidden="true">
+                <div class="logo-wrap">
+                  <img src="../assets/riflessa-logo.png" alt="">
+                </div>
+              </section>
+            </main>
+          </body>
+          </html>
+          HTML
+
+          cat > tests/startup-splash.test.js <<'JS'
+          const fs = require('fs');
+          const path = require('path');
+          const test = require('node:test');
+          const assert = require('node:assert/strict');
+
+          const ROOT = path.join(__dirname, '..');
+          const mainSource = fs.readFileSync(path.join(ROOT, 'electron', 'main.js'), 'utf8');
+          const splashHtml = fs.readFileSync(path.join(ROOT, 'electron', 'splash.html'), 'utf8');
+
+          test('avvio usa uno splash dedicato e mostra la UI solo quando e pronta', () => {
+            assert.match(mainSource, /const SPLASH_POS = path\.join\(__dirname, 'splash\.html'\)/);
+            assert.match(mainSource, /function createSplash\(\)/);
+            assert.match(mainSource, /show:\s*false/);
+            assert.match(mainSource, /transparent:\s*true/);
+            assert.match(mainSource, /splashWindow\.loadFile\(SPLASH_POS\)/);
+            assert.match(mainSource, /mainWindow\.once\('ready-to-show'/);
+            assert.doesNotMatch(mainSource, /mainWindow\.show\(\);\s*if \(!mainWindow\.isMaximized\(\)\)/);
+          });
+
+          test('splash usa solo logo Riflessa rotondo e caricamento circolare', () => {
+            assert.match(splashHtml, /\.\.\/assets\/riflessa-logo\.png/);
+            assert.match(splashHtml, /class="splash-shell"/);
+            assert.match(splashHtml, /class="splash-panel"/);
+            assert.match(splashHtml, /class="logo-wrap"/);
+            assert.match(splashHtml, /\.logo-wrap\{[\s\S]*width:244px;[\s\S]*height:244px;[\s\S]*border-radius:50%;[\s\S]*overflow:hidden/);
+            assert.match(splashHtml, /\.logo-wrap img\{[\s\S]*width:100%;[\s\S]*height:100%;[\s\S]*object-fit:cover;[\s\S]*border-radius:50%/);
+            assert.match(splashHtml, /conic-gradient/);
+            assert.match(splashHtml, /@keyframes ring-rotate/);
+            assert.doesNotMatch(splashHtml, /Preparazione applicazione/);
+            assert.doesNotMatch(splashHtml, /class="status-dot"/);
+            assert.doesNotMatch(splashHtml, /class="product"/);
+            assert.doesNotMatch(splashHtml, /class="hair-beauty"/);
+            assert.doesNotMatch(splashHtml, /class="loader"/);
+            assert.doesNotMatch(splashHtml, /linear-gradient\(90deg/);
+          });
+          JS
+
+          test "$(node -p "require('./package.json').version")" = '3.5.19'
+          test "$(node -p "require('./package-lock.json').version")" = '3.5.19'
+          test "$(node -p "require('./package-lock.json').packages[''].version")" = '3.5.19'
+
+      - name: Installa dipendenze e verifica
+        working-directory: source/${{ env.APP_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+          npm test
+          npm run check
+          node scripts/release-preflight.cjs
+
+      - name: Commit e push privato
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- \
+            "${APP_DIR}/electron/splash.html" \
+            "${APP_DIR}/tests/startup-splash.test.js" \
+            "${APP_DIR}/package.json" \
+            "${APP_DIR}/package-lock.json"
+          git diff --cached --check
+          git commit -m 'Release 3.5.19: splash circolare essenziale'
+          git push origin HEAD:main
+          echo "SOURCE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Avvia build pubblica 3.5.19
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh workflow run build-exe-registratore.yml \
+            --repo Mirkolas/riflessahairbeauty-workflows \
+            --ref main
