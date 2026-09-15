@@ -1,0 +1,267 @@
+name: Release 3.5.20 splash nitido - one shot
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/release-3520-splash-sharp-once.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+env:
+  SOURCE_REPOSITORY: Mirkolas/riflessahairbeauty
+  APP_DIR: riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
+  SOURCE_PAT: ${{ secrets.WORKFLOW_PAT }}
+
+jobs:
+  aggiorna:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Verifica token
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$SOURCE_PAT" || { echo '::error::WORKFLOW_PAT mancante'; exit 1; }
+
+      - name: Checkout repo privata
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          ref: main
+          token: ${{ env.SOURCE_PAT }}
+          path: source
+          fetch-depth: 1
+          persist-credentials: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Scarica logo originale ad alta risoluzione
+        working-directory: source/${{ env.APP_DIR }}
+        env:
+          GH_TOKEN: ${{ env.SOURCE_PAT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, json, os, urllib.request
+          repo = os.environ['SOURCE_REPOSITORY']
+          token = os.environ['GH_TOKEN']
+          # Blob lossless 1254x1254, pixel-identico all'immagine originale caricata.
+          blob_sha = 'PLACEHOLDER_BLOB_SHA'
+          req = urllib.request.Request(
+              f'https://api.github.com/repos/{repo}/git/blobs/{blob_sha}',
+              headers={'Authorization': f'Bearer {token}', 'Accept': 'application/vnd.github+json'}
+          )
+          with urllib.request.urlopen(req) as r:
+              payload = json.load(r)
+          data = base64.b64decode(payload['content'])
+          open('assets/riflessa-splash-logo.webp', 'wb').write(data)
+          PY
+          echo "d2dfb3b44dcb5c74a5d77481dfde1706ecdeafb452d58acdf91f52d3772c40d0  assets/riflessa-splash-logo.webp" | sha256sum -c -
+
+      - name: Aggiorna splash e versione 3.5.20
+        working-directory: source/${{ env.APP_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          CURRENT_SHA="$(git -C ../.. rev-parse HEAD)"
+          [[ "$CURRENT_SHA" == 'c40923dcad22c8c277ffc779d2ea7782b09c62b8' ]] || { echo "::error::Main privata cambiata: $CURRENT_SHA"; exit 1; }
+          [[ "$(node -p "require('./package.json').version")" == '3.5.19' ]] || { echo '::error::Versione sorgente diversa da 3.5.19'; exit 1; }
+
+          npm version 3.5.20 --no-git-tag-version
+
+          cat > electron/splash.html <<'HTML'
+          <!doctype html>
+          <html lang="it">
+          <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width,initial-scale=1">
+            <title>Avvio Riflessa</title>
+            <style>
+              :root{
+                color-scheme:light;
+                --accent:#ad7446;
+                --accent-warm:#d19a68;
+                --halo:rgba(186,133,84,.24);
+              }
+              *{box-sizing:border-box}
+              html,body{
+                width:100%;
+                height:100%;
+                margin:0;
+                overflow:hidden;
+                background:transparent;
+              }
+              body{
+                display:grid;
+                place-items:center;
+                user-select:none;
+                -webkit-app-region:drag;
+              }
+              .splash-shell{
+                position:relative;
+                width:286px;
+                height:286px;
+                display:grid;
+                place-items:center;
+                animation:splash-enter .38s cubic-bezier(.2,.75,.28,1) both;
+              }
+              .splash-shell::before,
+              .splash-shell::after{
+                content:"";
+                position:absolute;
+                border-radius:50%;
+                pointer-events:none;
+              }
+              .splash-shell::before{
+                inset:0;
+                background:conic-gradient(
+                  from -45deg,
+                  transparent 0 10%,
+                  rgba(172,114,68,.22) 20%,
+                  var(--accent-warm) 37%,
+                  var(--accent) 52%,
+                  rgba(172,114,68,.16) 67%,
+                  transparent 79% 100%
+                );
+                -webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 4px),#000 calc(100% - 3px));
+                mask:radial-gradient(farthest-side,transparent calc(100% - 4px),#000 calc(100% - 3px));
+                animation:ring-rotate 1.45s linear infinite;
+              }
+              .splash-shell::after{
+                inset:10px;
+                border:1px solid rgba(172,114,68,.22);
+                box-shadow:0 0 22px var(--halo);
+              }
+              .splash-panel{
+                position:relative;
+                width:258px;
+                height:258px;
+                padding:0;
+                border:0;
+                border-radius:50%;
+                overflow:hidden;
+                display:grid;
+                place-items:center;
+                background:transparent;
+              }
+              .logo-wrap{
+                width:258px;
+                height:258px;
+                border-radius:50%;
+                overflow:hidden;
+                display:grid;
+                place-items:center;
+              }
+              .logo-wrap img{
+                display:block;
+                width:100%;
+                height:100%;
+                object-fit:contain;
+                border-radius:50%;
+                image-rendering:auto;
+              }
+              @keyframes ring-rotate{to{transform:rotate(360deg)}}
+              @keyframes splash-enter{
+                from{opacity:0;transform:scale(.985)}
+                to{opacity:1;transform:scale(1)}
+              }
+              @media (prefers-reduced-motion:reduce){
+                .splash-shell,
+                .splash-shell::before{animation:none}
+              }
+            </style>
+          </head>
+          <body>
+            <main class="splash-shell" role="status" aria-label="Riflessa in avvio">
+              <section class="splash-panel" aria-hidden="true">
+                <div class="logo-wrap">
+                  <img src="../assets/riflessa-splash-logo.webp" alt="">
+                </div>
+              </section>
+            </main>
+          </body>
+          </html>
+          HTML
+
+          cat > tests/startup-splash.test.js <<'JS'
+          const test = require('node:test');
+          const assert = require('node:assert/strict');
+          const crypto = require('node:crypto');
+          const fs = require('node:fs');
+          const path = require('node:path');
+
+          const root = path.join(__dirname, '..');
+          const main = fs.readFileSync(path.join(root, 'electron', 'main.js'), 'utf8');
+          const splash = fs.readFileSync(path.join(root, 'electron', 'splash.html'), 'utf8');
+          const splashLogo = fs.readFileSync(path.join(root, 'assets', 'riflessa-splash-logo.webp'));
+
+          test('avvio usa splash circolare nitido e mostra la finestra principale solo a caricamento completato', () => {
+            assert.match(main, /createSplashWindow\(\)/);
+            assert.match(main, /show:\s*false/);
+            assert.match(main, /did-finish-load/);
+            assert.match(main, /revealMainWindow/);
+
+            assert.match(splash, /riflessa-splash-logo\.webp/);
+            assert.match(splash, /class="splash-shell"/);
+            assert.match(splash, /class="splash-panel"/);
+            assert.match(splash, /class="logo-wrap"/);
+            assert.match(splash, /\.logo-wrap\{[\s\S]*width:258px;[\s\S]*height:258px;[\s\S]*border-radius:50%;[\s\S]*overflow:hidden/);
+            assert.match(splash, /\.logo-wrap img\{[\s\S]*width:100%;[\s\S]*height:100%;[\s\S]*object-fit:contain;[\s\S]*image-rendering:auto/);
+            assert.match(splash, /conic-gradient\(/);
+            assert.match(splash, /@keyframes\s+ring-rotate/);
+            assert.match(splash, /prefers-reduced-motion/);
+            assert.doesNotMatch(splash, /Preparazione applicazione/);
+            assert.doesNotMatch(splash, /\.logo-wrap img\{[\s\S]*filter:/);
+            assert.doesNotMatch(splash, /class="status-dot"|class="product"|class="hair-beauty"|class="loader"|class="track"|class="bar"/);
+
+            assert.equal(splashLogo.length, 591980, 'Asset splash inatteso');
+            assert.equal(splashLogo.subarray(0, 4).toString('ascii'), 'RIFF');
+            assert.equal(splashLogo.subarray(8, 12).toString('ascii'), 'WEBP');
+            assert.equal(
+              crypto.createHash('sha256').update(splashLogo).digest('hex'),
+              'd2dfb3b44dcb5c74a5d77481dfde1706ecdeafb452d58acdf91f52d3772c40d0',
+              'Il logo splash deve restare esattamente quello validato'
+            );
+          });
+          JS
+
+          test "$(node -p "require('./package.json').version")" = '3.5.20'
+          test "$(node -p "require('./package-lock.json').version")" = '3.5.20'
+          test "$(node -p "require('./package-lock.json').packages[''].version")" = '3.5.20'
+
+      - name: Installa dipendenze e verifica
+        working-directory: source/${{ env.APP_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+          npm test
+          npm run check
+          node scripts/release-preflight.cjs
+
+      - name: Commit e push privato
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- "${APP_DIR}/assets/riflessa-splash-logo.webp" "${APP_DIR}/electron/splash.html" "${APP_DIR}/tests/startup-splash.test.js" "${APP_DIR}/package.json" "${APP_DIR}/package-lock.json"
+          git diff --cached --check
+          git commit -m 'Release 3.5.20: splash nitido con logo dedicato'
+          git push origin HEAD:main
+
+      - name: Avvia build pubblica 3.5.20
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run build-exe-registratore.yml --repo Mirkolas/riflessahairbeauty-workflows --ref main
