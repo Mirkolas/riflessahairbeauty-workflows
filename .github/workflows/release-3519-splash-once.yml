@@ -171,40 +171,32 @@ jobs:
           HTML
 
           cat > tests/startup-splash.test.js <<'JS'
-          const fs = require('fs');
-          const path = require('path');
           const test = require('node:test');
           const assert = require('node:assert/strict');
+          const fs = require('node:fs');
+          const path = require('node:path');
 
-          const ROOT = path.join(__dirname, '..');
-          const mainSource = fs.readFileSync(path.join(ROOT, 'electron', 'main.js'), 'utf8');
-          const splashHtml = fs.readFileSync(path.join(ROOT, 'electron', 'splash.html'), 'utf8');
+          const root = path.join(__dirname, '..');
+          const main = fs.readFileSync(path.join(root, 'electron', 'main.js'), 'utf8');
+          const splash = fs.readFileSync(path.join(root, 'electron', 'splash.html'), 'utf8');
 
-          test('avvio usa uno splash dedicato e mostra la UI solo quando e pronta', () => {
-            assert.match(mainSource, /const SPLASH_POS = path\.join\(__dirname, 'splash\.html'\)/);
-            assert.match(mainSource, /function createSplash\(\)/);
-            assert.match(mainSource, /show:\s*false/);
-            assert.match(mainSource, /transparent:\s*true/);
-            assert.match(mainSource, /splashWindow\.loadFile\(SPLASH_POS\)/);
-            assert.match(mainSource, /mainWindow\.once\('ready-to-show'/);
-            assert.doesNotMatch(mainSource, /mainWindow\.show\(\);\s*if \(!mainWindow\.isMaximized\(\)\)/);
-          });
+          test('avvio usa splash circolare professionale e mostra la finestra principale solo a caricamento completato', () => {
+            assert.match(main, /createSplashWindow\(\)/);
+            assert.match(main, /show:\s*false/);
+            assert.match(main, /did-finish-load/);
+            assert.match(main, /revealMainWindow/);
 
-          test('splash usa solo logo Riflessa rotondo e caricamento circolare', () => {
-            assert.match(splashHtml, /\.\.\/assets\/riflessa-logo\.png/);
-            assert.match(splashHtml, /class="splash-shell"/);
-            assert.match(splashHtml, /class="splash-panel"/);
-            assert.match(splashHtml, /class="logo-wrap"/);
-            assert.match(splashHtml, /\.logo-wrap\{[\s\S]*width:244px;[\s\S]*height:244px;[\s\S]*border-radius:50%;[\s\S]*overflow:hidden/);
-            assert.match(splashHtml, /\.logo-wrap img\{[\s\S]*width:100%;[\s\S]*height:100%;[\s\S]*object-fit:cover;[\s\S]*border-radius:50%/);
-            assert.match(splashHtml, /conic-gradient/);
-            assert.match(splashHtml, /@keyframes ring-rotate/);
-            assert.doesNotMatch(splashHtml, /Preparazione applicazione/);
-            assert.doesNotMatch(splashHtml, /class="status-dot"/);
-            assert.doesNotMatch(splashHtml, /class="product"/);
-            assert.doesNotMatch(splashHtml, /class="hair-beauty"/);
-            assert.doesNotMatch(splashHtml, /class="loader"/);
-            assert.doesNotMatch(splashHtml, /linear-gradient\(90deg/);
+            assert.match(splash, /riflessa-logo\.png/);
+            assert.match(splash, /class="splash-shell"/);
+            assert.match(splash, /class="splash-panel"/);
+            assert.match(splash, /class="logo-wrap"/);
+            assert.match(splash, /\.logo-wrap\{[\s\S]*width:244px;[\s\S]*height:244px;[\s\S]*border-radius:50%;[\s\S]*overflow:hidden/);
+            assert.match(splash, /\.logo-wrap img\{[\s\S]*width:100%;[\s\S]*height:100%;[\s\S]*object-fit:cover;[\s\S]*border-radius:50%/);
+            assert.match(splash, /conic-gradient\(/);
+            assert.match(splash, /@keyframes\s+ring-rotate/);
+            assert.match(splash, /prefers-reduced-motion/);
+            assert.doesNotMatch(splash, /Preparazione applicazione/);
+            assert.doesNotMatch(splash, /class="status-dot"|class="product"|class="hair-beauty"|class="loader"|class="track"|class="bar"/);
           });
           JS
 
