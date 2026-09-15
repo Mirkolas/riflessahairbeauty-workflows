@@ -33,7 +33,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: firebase-ripristino-registratore
+  group: firebase-backup-registratore
   cancel-in-progress: false
 
 env:
