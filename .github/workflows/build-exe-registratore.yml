@@ -302,3 +302,5 @@ jobs:
         shell: pwsh
         run: |
           if ($env:CODESIGN_PFX_PATH) { Remove-Item $env:CODESIGN_PFX_PATH -Force -ErrorAction SilentlyContinue }
+
+# trigger-release-3.5.20
