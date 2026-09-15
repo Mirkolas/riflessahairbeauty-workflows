@@ -24,24 +24,19 @@ jobs:
           persist-credentials: true
 
       - name: Corregge gestione 404 release
-        shell: python {0}
+        shell: bash
         run: |
+          set -euo pipefail
+          python3 - <<'PY'
           from pathlib import Path
           p = Path('.github/workflows/build-exe-registratore.yml')
           s = p.read_text(encoding='utf-8')
-          old = '''          RELEASE_JSON="$(gh api "repos/${SOURCE_REPOSITORY}/releases/tags/${TAG}" 2>/dev/null || true)"
-          RELEASE_COMPLETE=false
-'''
-          new = '''          RELEASE_JSON=""
-          if RELEASE_RESPONSE="$(gh api "repos/${SOURCE_REPOSITORY}/releases/tags/${TAG}" 2>/dev/null)"; then
-            RELEASE_JSON="$RELEASE_RESPONSE"
-          fi
-          RELEASE_COMPLETE=false
-'''
+          old = '          RELEASE_JSON="$(gh api "repos/${SOURCE_REPOSITORY}/releases/tags/${TAG}" 2>/dev/null || true)"\n          RELEASE_COMPLETE=false\n'
+          new = '          RELEASE_JSON=""\n          if RELEASE_RESPONSE="$(gh api "repos/${SOURCE_REPOSITORY}/releases/tags/${TAG}" 2>/dev/null)"; then\n            RELEASE_JSON="$RELEASE_RESPONSE"\n          fi\n          RELEASE_COMPLETE=false\n'
           if old not in s:
               raise SystemExit('Blocco release atteso non trovato: nessuna modifica applicata')
-          s = s.replace(old, new, 1)
-          p.write_text(s, encoding='utf-8')
+          p.write_text(s.replace(old, new, 1), encoding='utf-8')
+          PY
 
       - name: Verifica modifica
         shell: bash
