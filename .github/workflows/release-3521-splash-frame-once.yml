@@ -57,18 +57,40 @@ jobs:
 
           const splashPath = path.join(app, 'electron', 'splash.html');
           let splash = fs.readFileSync(splashPath, 'utf8');
-          const oldCss = `              .logo-wrap img{\n                display:block;\n                width:314px;\n                height:314px;\n                max-width:none;\n                object-fit:contain;\n                image-rendering:auto;\n                filter:none;\n                transform:none;\n              }`;
-          const newCss = `              .logo-wrap img{\n                display:block;\n                width:274px;\n                height:274px;\n                max-width:100%;\n                object-fit:contain;\n                object-position:center center;\n                image-rendering:auto;\n                filter:none;\n                transform:none;\n              }`;
-          if (!splash.includes(oldCss)) throw new Error('CSS splash atteso non trovato: nessuna modifica applicata');
-          splash = splash.replace(oldCss, newCss);
+          const blockMatch = splash.match(/\.logo-wrap img\{([^}]*)\}/i);
+          if (!blockMatch) throw new Error('Blocco CSS .logo-wrap img non trovato');
+          const current = blockMatch[1];
+          for (const expected of ['width:314px;', 'height:314px;', 'max-width:none;', 'object-fit:contain;']) {
+            if (!current.includes(expected)) throw new Error(`CSS splash inatteso: manca ${expected}`);
+          }
+          const replacement = `.logo-wrap img{
+                display:block;
+                width:274px;
+                height:274px;
+                max-width:100%;
+                object-fit:contain;
+                object-position:center center;
+                image-rendering:auto;
+                filter:none;
+                transform:none;
+              }`;
+          splash = splash.replace(blockMatch[0], replacement);
           fs.writeFileSync(splashPath, splash);
 
           const testPath = path.join(app, 'tests', 'startup-splash.test.js');
           let test = fs.readFileSync(testPath, 'utf8');
-          const oldAssertion = `            assert.match(splash, /\\.logo-wrap img\\{[\\s\\S]*width:314px;[\\s\\S]*height:314px;[\\s\\S]*object-fit:contain;[\\s\\S]*filter:none;[\\s\\S]*transform:none/);`;
-          const newAssertion = `            const logoCss = splash.match(/\\.logo-wrap img\\{([^}]*)\\}/i)?.[1] || '';\n            assert.match(logoCss, /width:274px;/);\n            assert.match(logoCss, /height:274px;/);\n            assert.match(logoCss, /max-width:100%;/);\n            assert.match(logoCss, /object-fit:contain;/);\n            assert.match(logoCss, /object-position:center center;/);\n            assert.match(logoCss, /filter:none;/);\n            assert.match(logoCss, /transform:none;/);\n            assert.doesNotMatch(logoCss, /314px|object-fit:cover|max-width:none/);`;
-          if (!test.includes(oldAssertion)) throw new Error('Assertion splash attesa non trovata');
-          test = test.replace(oldAssertion, newAssertion);
+          const assertionRe = /^\s*assert\.match\(splash, \/\\\.logo-wrap img\\\{\[\\s\\S\]\*width:314px;\[\\s\\S\]\*height:314px;\[\\s\\S\]\*object-fit:contain;\[\\s\\S\]\*filter:none;\[\\s\\S\]\*transform:none\/\);\s*$/m;
+          if (!assertionRe.test(test)) throw new Error('Assertion splash 314px attesa non trovata');
+          const newAssertion = `            const logoCss = splash.match(/\\.logo-wrap img\\{([^}]*)\\}/i)?.[1] || '';
+            assert.match(logoCss, /width:274px;/);
+            assert.match(logoCss, /height:274px;/);
+            assert.match(logoCss, /max-width:100%;/);
+            assert.match(logoCss, /object-fit:contain;/);
+            assert.match(logoCss, /object-position:center center;/);
+            assert.match(logoCss, /filter:none;/);
+            assert.match(logoCss, /transform:none;/);
+            assert.doesNotMatch(logoCss, /314px|object-fit:cover|max-width:none/);`;
+          test = test.replace(assertionRe, newAssertion);
           fs.writeFileSync(testPath, test);
           NODE
 
@@ -85,6 +107,10 @@ jobs:
           test "$(node -p "require('./package.json').version")" = "3.5.21"
           test "$(node -p "require('./package-lock.json').version")" = "3.5.21"
           test "$(node -p "require('./package-lock.json').packages[''].version")" = "3.5.21"
+          grep -q 'width:274px;' electron/splash.html
+          grep -q 'height:274px;' electron/splash.html
+          grep -q 'max-width:100%;' electron/splash.html
+          grep -q 'object-position:center center;' electron/splash.html
           git diff --check
 
       - name: Push atomico 3.5.21 sulla repo privata
