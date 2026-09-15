@@ -1,0 +1,43 @@
+name: Trigger build 3.5.21 (one-shot)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/trigger-build-3521-once.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      WORKFLOW_PAT: ${{ secrets.WORKFLOW_PAT }}
+    steps:
+      - name: Verifica token workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$WORKFLOW_PAT" || { echo '::error::Secret WORKFLOW_PAT mancante'; exit 1; }
+
+      - name: Checkout repo pubblica con PAT
+        uses: actions/checkout@v4
+        with:
+          token: ${{ env.WORKFLOW_PAT }}
+          persist-credentials: true
+          fetch-depth: 1
+
+      - name: Trigger immediato build 3.5.21
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '\n# trigger-release-3.5.21\n' >> .github/workflows/build-exe-registratore.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/workflows/build-exe-registratore.yml
+          git diff --cached --check
+          git commit -m "Trigger build registratore 3.5.21"
+          git push origin HEAD:main
