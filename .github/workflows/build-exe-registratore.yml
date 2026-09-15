@@ -27,6 +27,7 @@ jobs:
   verifica-versione:
     name: Verifica nuova versione privata
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       build: ${{ steps.check.outputs.build }}
       version: ${{ steps.check.outputs.version }}
@@ -79,17 +80,44 @@ jobs:
           echo "portable_name=${PORTABLE}" >> "$GITHUB_OUTPUT"
           echo "installer_name=${INSTALLER}" >> "$GITHUB_OUTPUT"
 
-          ASSETS="$(gh release view "$TAG" --repo "$SOURCE_REPOSITORY" --json assets --jq '.assets[].name' 2>/dev/null || true)"
-          RELEASE_COMPLETE=true
-          for REQUIRED in "$PORTABLE" "$INSTALLER" "$INSTALLER.blockmap" latest.yml; do
-            if ! printf '%s\n' "$ASSETS" | grep -Fxq "$REQUIRED"; then RELEASE_COMPLETE=false; fi
-          done
+          RELEASE_JSON="$(gh api "repos/${SOURCE_REPOSITORY}/releases/tags/${TAG}" 2>/dev/null || true)"
+          RELEASE_COMPLETE=false
+          if [[ -n "$RELEASE_JSON" ]]; then
+            RELEASE_TARGET="$(jq -r '.target_commitish // empty' <<<"$RELEASE_JSON")"
+            if [[ "$RELEASE_TARGET" != "$SOURCE_SHA" ]]; then
+              echo "::error::La release ${TAG} esiste per il commit ${RELEASE_TARGET:-sconosciuto}, ma main punta a ${SOURCE_SHA}. Incrementare la versione prima di pubblicare sorgente diversa."
+              exit 1
+            fi
+
+            asset_ok() {
+              local name="$1"
+              local min_size="$2"
+              jq -e --arg name "$name" --argjson min "$min_size" \
+                '.assets[] | select(.name == $name and .state == "uploaded" and .size >= $min)' \
+                <<<"$RELEASE_JSON" >/dev/null
+            }
+
+            if asset_ok "$PORTABLE" 10485760 \
+              && asset_ok "$INSTALLER" 10485760 \
+              && asset_ok "$INSTALLER.blockmap" 1 \
+              && asset_ok "latest.yml" 1; then
+              RELEASE_COMPLETE=true
+            fi
+          fi
 
           TOKEN="$(gcloud auth print-access-token)"
           FIRESTORE_URL="https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/appUpdateChannels/stable"
-          CURRENT_VERSION="$(curl -sS -H "Authorization: Bearer $TOKEN" "$FIRESTORE_URL" | jq -r '.fields.version.stringValue // empty' || true)"
+          FIRESTORE_JSON="$(curl -sS -H "Authorization: Bearer $TOKEN" "$FIRESTORE_URL" || true)"
+          CURRENT_VERSION="$(jq -r '.fields.version.stringValue // empty' <<<"$FIRESTORE_JSON" 2>/dev/null || true)"
+          CURRENT_SOURCE_SHA="$(jq -r '.fields.sourceSha.stringValue // empty' <<<"$FIRESTORE_JSON" 2>/dev/null || true)"
           FIRESTORE_READY=false
-          if [[ "$CURRENT_VERSION" == "$VERSION" ]]; then FIRESTORE_READY=true; fi
+          if [[ "$CURRENT_VERSION" == "$VERSION" ]]; then
+            if [[ "$CURRENT_SOURCE_SHA" != "$SOURCE_SHA" ]]; then
+              echo "::error::Il canale Firestore dichiara la versione ${VERSION} ma appartiene al commit ${CURRENT_SOURCE_SHA:-sconosciuto}; sorgente corrente ${SOURCE_SHA}. Incrementare la versione o correggere il canale prima di proseguire."
+              exit 1
+            fi
+            FIRESTORE_READY=true
+          fi
 
           echo "Release completa: $RELEASE_COMPLETE"
           echo "Firestore corrente: ${CURRENT_VERSION:-nessuna}"
@@ -97,7 +125,7 @@ jobs:
             echo 'build=true' >> "$GITHUB_OUTPUT"
           else
             echo 'build=false' >> "$GITHUB_OUTPUT"
-            echo "Release privata $TAG e canale Firestore già completi."
+            echo "Release privata $TAG e canale Firestore già completi e coerenti con ${SOURCE_SHA}."
           fi
 
   build-windows:
@@ -106,6 +134,9 @@ jobs:
     if: needs.verifica-versione.outputs.build == 'true'
     runs-on: windows-latest
     timeout-minutes: 75
+    concurrency:
+      group: firebase-backup-registratore
+      cancel-in-progress: false
     env:
       VERSION: ${{ needs.verifica-versione.outputs.version }}
       SOURCE_SHA: ${{ needs.verifica-versione.outputs.source_sha }}
@@ -125,6 +156,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: source/${{ env.APP_DIR }}/package-lock.json
 
       - name: Test e preflight
         shell: pwsh
