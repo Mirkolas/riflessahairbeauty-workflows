@@ -1,0 +1,114 @@
+name: Release 3.5.21 splash inquadrato (one-shot)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/release-3521-splash-frame-once.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-3521-splash-frame-once
+  cancel-in-progress: false
+
+env:
+  PRIVATE_REPOSITORY: Mirkolas/riflessahairbeauty
+  APP_DIR: riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
+
+jobs:
+  prepara-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SOURCE_PAT: ${{ secrets.PUBLIC_REPO_TOKEN }}
+      WORKFLOW_PAT: ${{ secrets.WORKFLOW_PAT }}
+    steps:
+      - name: Verifica token
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$SOURCE_PAT" || { echo '::error::Secret PUBLIC_REPO_TOKEN mancante'; exit 1; }
+
+      - name: Checkout sorgente privata
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PRIVATE_REPOSITORY }}
+          ref: main
+          token: ${{ env.SOURCE_PAT }}
+          path: source
+          fetch-depth: 1
+          persist-credentials: true
+
+      - name: Corregge inquadratura splash e prepara 3.5.21
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="source/${APP_DIR}"
+          CURRENT="$(node -p "require('./${APP}/package.json').version")"
+          test "$CURRENT" = "3.5.20" || { echo "::error::Versione privata inattesa: ${CURRENT}"; exit 1; }
+
+          APP="$APP" node <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const app = process.env.APP;
+
+          const splashPath = path.join(app, 'electron', 'splash.html');
+          let splash = fs.readFileSync(splashPath, 'utf8');
+          const oldCss = `              .logo-wrap img{\n                display:block;\n                width:314px;\n                height:314px;\n                max-width:none;\n                object-fit:contain;\n                image-rendering:auto;\n                filter:none;\n                transform:none;\n              }`;
+          const newCss = `              .logo-wrap img{\n                display:block;\n                width:274px;\n                height:274px;\n                max-width:100%;\n                object-fit:contain;\n                object-position:center center;\n                image-rendering:auto;\n                filter:none;\n                transform:none;\n              }`;
+          if (!splash.includes(oldCss)) throw new Error('CSS splash atteso non trovato: nessuna modifica applicata');
+          splash = splash.replace(oldCss, newCss);
+          fs.writeFileSync(splashPath, splash);
+
+          const testPath = path.join(app, 'tests', 'startup-splash.test.js');
+          let test = fs.readFileSync(testPath, 'utf8');
+          const oldAssertion = `            assert.match(splash, /\\.logo-wrap img\\{[\\s\\S]*width:314px;[\\s\\S]*height:314px;[\\s\\S]*object-fit:contain;[\\s\\S]*filter:none;[\\s\\S]*transform:none/);`;
+          const newAssertion = `            const logoCss = splash.match(/\\.logo-wrap img\\{([^}]*)\\}/i)?.[1] || '';\n            assert.match(logoCss, /width:274px;/);\n            assert.match(logoCss, /height:274px;/);\n            assert.match(logoCss, /max-width:100%;/);\n            assert.match(logoCss, /object-fit:contain;/);\n            assert.match(logoCss, /object-position:center center;/);\n            assert.match(logoCss, /filter:none;/);\n            assert.match(logoCss, /transform:none;/);\n            assert.doesNotMatch(logoCss, /314px|object-fit:cover|max-width:none/);`;
+          if (!test.includes(oldAssertion)) throw new Error('Assertion splash attesa non trovata');
+          test = test.replace(oldAssertion, newAssertion);
+          fs.writeFileSync(testPath, test);
+          NODE
+
+          cd "$APP"
+          npm version 3.5.21 --no-git-tag-version
+
+      - name: Test e preflight release
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "source/${APP_DIR}"
+          npm ci --no-audit --no-fund
+          npm run release:check
+          test "$(node -p "require('./package.json').version")" = "3.5.21"
+          test "$(node -p "require('./package-lock.json').version")" = "3.5.21"
+          test "$(node -p "require('./package-lock.json').packages[''].version")" = "3.5.21"
+          git diff --check
+
+      - name: Push atomico 3.5.21 sulla repo privata
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd source
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "${APP_DIR}/electron/splash.html" \
+                  "${APP_DIR}/tests/startup-splash.test.js" \
+                  "${APP_DIR}/package.json" \
+                  "${APP_DIR}/package-lock.json"
+          git diff --cached --check
+          git commit -m "Release 3.5.21: corregge inquadratura splash"
+          git push origin HEAD:main
+
+      - name: Avvia build pubblica immediata
+        if: ${{ env.WORKFLOW_PAT != '' }}
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ env.WORKFLOW_PAT }}
+        run: |
+          gh workflow run build-exe-registratore.yml \
+            --repo Mirkolas/riflessahairbeauty-workflows \
+            --ref main
