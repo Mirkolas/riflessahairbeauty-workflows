@@ -62,13 +62,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: app/riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions/package-lock.json
 
       - name: Installa dipendenze e verifica
         working-directory: app/riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
         shell: bash
         run: |
           set -euo pipefail
-          npm install --ignore-scripts --no-audit --no-fund
+          npm ci --ignore-scripts --no-audit --no-fund
           npm test
           npm run check
 
