@@ -1,0 +1,229 @@
+name: Release 3.5.20 splash nitido (one-shot)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/release-3520-splash-once.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-3520-splash-once
+  cancel-in-progress: false
+
+env:
+  PRIVATE_REPOSITORY: Mirkolas/riflessahairbeauty
+  APP_DIR: riflessahairbeauty-app-registratore/Riflessabeautyapp_v3.5.2_receipt_actions
+  SOURCE_IMAGE: e6609310-49cc-4e40-8c26-9e2324102966.png
+  EXPECTED_IMAGE_SHA256: ff0af842ab6dd1491b1564ae91936a58d99add9a3f1b117f4509ad5ef2d30b6b
+
+jobs:
+  prepara-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      WORKFLOW_PAT: ${{ secrets.WORKFLOW_PAT }}
+    steps:
+      - name: Verifica token dedicato
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$WORKFLOW_PAT" || { echo '::error::Secret WORKFLOW_PAT mancante'; exit 1; }
+
+      - name: Checkout repo pubblica
+        uses: actions/checkout@v4
+        with:
+          path: public
+          persist-credentials: false
+
+      - name: Checkout sorgente privata
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PRIVATE_REPOSITORY }}
+          ref: main
+          token: ${{ env.WORKFLOW_PAT }}
+          path: source
+          fetch-depth: 1
+          persist-credentials: true
+
+      - name: Verifica immagine originale
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f "public/${SOURCE_IMAGE}"
+          ACTUAL="$(sha256sum "public/${SOURCE_IMAGE}" | awk '{print $1}')"
+          echo "SHA256 immagine: ${ACTUAL}"
+          test "$ACTUAL" = "$EXPECTED_IMAGE_SHA256" || { echo '::error::L immagine non coincide con quella approvata'; exit 1; }
+
+      - name: Prepara splash 3.5.20
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="source/${APP_DIR}"
+          CURRENT="$(node -p "require('./${APP}/package.json').version")"
+          test "$CURRENT" = "3.5.19" || { echo "::error::Versione privata inattesa: ${CURRENT}"; exit 1; }
+
+          cp "public/${SOURCE_IMAGE}" "${APP}/assets/riflessa-splash.png"
+
+          cat > "${APP}/electron/splash.html" <<'EOF'
+          <!doctype html>
+          <html lang="it">
+          <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width,initial-scale=1">
+            <title>Avvio Riflessa</title>
+            <style>
+              :root{
+                color-scheme:light;
+                --accent:#ad7446;
+                --accent-warm:#d19a68;
+                --halo:rgba(186,133,84,.20);
+              }
+              *{box-sizing:border-box}
+              html,body{
+                width:100%;
+                height:100%;
+                margin:0;
+                overflow:hidden;
+                background:transparent;
+              }
+              body{
+                display:grid;
+                place-items:center;
+                user-select:none;
+                -webkit-app-region:drag;
+              }
+              .splash-shell{
+                position:relative;
+                width:300px;
+                height:300px;
+                display:grid;
+                place-items:center;
+              }
+              .splash-shell::before{
+                content:"";
+                position:absolute;
+                inset:0;
+                border-radius:50%;
+                background:conic-gradient(
+                  from -45deg,
+                  transparent 0 10%,
+                  rgba(172,114,68,.18) 20%,
+                  var(--accent-warm) 37%,
+                  var(--accent) 52%,
+                  rgba(172,114,68,.14) 67%,
+                  transparent 79% 100%
+                );
+                -webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 4px),#000 calc(100% - 3px));
+                mask:radial-gradient(farthest-side,transparent calc(100% - 4px),#000 calc(100% - 3px));
+                animation:ring-rotate 1.45s linear infinite;
+                pointer-events:none;
+              }
+              .logo-wrap{
+                width:274px;
+                height:274px;
+                border-radius:50%;
+                overflow:hidden;
+                display:grid;
+                place-items:center;
+                background:transparent;
+                box-shadow:0 13px 28px rgba(50,32,17,.12),0 0 24px var(--halo);
+              }
+              .logo-wrap img{
+                display:block;
+                width:314px;
+                height:314px;
+                max-width:none;
+                flex:none;
+                object-fit:contain;
+                image-rendering:auto;
+                filter:none;
+                transform:none;
+              }
+              @keyframes ring-rotate{to{transform:rotate(360deg)}}
+              @media (prefers-reduced-motion:reduce){
+                .splash-shell::before{animation:none}
+              }
+            </style>
+          </head>
+          <body>
+            <main class="splash-shell" role="status" aria-label="Riflessa in avvio">
+              <div class="logo-wrap" aria-hidden="true">
+                <img src="../assets/riflessa-splash.png" alt="">
+              </div>
+            </main>
+          </body>
+          </html>
+          EOF
+
+          cat > "${APP}/tests/startup-splash.test.js" <<'EOF'
+          const test = require('node:test');
+          const assert = require('node:assert/strict');
+          const fs = require('node:fs');
+          const path = require('node:path');
+
+          const root = path.join(__dirname, '..');
+          const main = fs.readFileSync(path.join(root, 'electron', 'main.js'), 'utf8');
+          const splash = fs.readFileSync(path.join(root, 'electron', 'splash.html'), 'utf8');
+          const splashAsset = path.join(root, 'assets', 'riflessa-splash.png');
+
+          test('avvio usa il logo originale nitido e mostra solo il caricamento circolare', () => {
+            assert.match(main, /createSplashWindow\(\)/);
+            assert.match(main, /show:\s*false/);
+            assert.match(main, /did-finish-load/);
+            assert.match(main, /revealMainWindow/);
+
+            assert.equal(fs.existsSync(splashAsset), true);
+            assert.ok(fs.statSync(splashAsset).size > 1_000_000);
+            assert.match(splash, /riflessa-splash\.png/);
+            assert.match(splash, /class="splash-shell"/);
+            assert.match(splash, /class="logo-wrap"/);
+            assert.match(splash, /\.logo-wrap img\{[\s\S]*width:314px;[\s\S]*height:314px;[\s\S]*object-fit:contain;[\s\S]*filter:none;[\s\S]*transform:none/);
+            assert.match(splash, /conic-gradient\(/);
+            assert.match(splash, /@keyframes\s+ring-rotate/);
+            assert.doesNotMatch(splash, /Preparazione applicazione|Riflessa Hair|HAIR\s*&\s*BEAUTY/);
+            assert.doesNotMatch(splash, /class="status-dot"|class="product"|class="hair-beauty"|class="loader"|class="track"|class="bar"/);
+          });
+          EOF
+
+          cd "$APP"
+          npm version 3.5.20 --no-git-tag-version
+
+      - name: Test e preflight release
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "source/${APP_DIR}"
+          npm run release:check
+          test "$(node -p "require('./package.json').version")" = "3.5.20"
+          test "$(node -p "require('./package-lock.json').version")" = "3.5.20"
+          test "$(node -p "require('./package-lock.json').packages[''].version")" = "3.5.20"
+
+      - name: Push atomico 3.5.20 sulla repo privata
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd source
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "${APP_DIR}/assets/riflessa-splash.png" \
+                  "${APP_DIR}/electron/splash.html" \
+                  "${APP_DIR}/tests/startup-splash.test.js" \
+                  "${APP_DIR}/package.json" \
+                  "${APP_DIR}/package-lock.json"
+          git diff --cached --check
+          git commit -m "Release 3.5.20: splash nitido con logo originale"
+          git push origin HEAD:main
+
+      - name: Prova ad avviare subito la build pubblica
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ env.WORKFLOW_PAT }}
+        run: |
+          gh workflow run build-exe-registratore.yml \
+            --repo Mirkolas/riflessahairbeauty-workflows \
+            --ref main
