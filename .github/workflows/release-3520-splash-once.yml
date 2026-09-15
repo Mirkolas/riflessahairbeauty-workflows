@@ -25,13 +25,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      WORKFLOW_PAT: ${{ secrets.WORKFLOW_PAT }}
+      SOURCE_PAT: ${{ secrets.PUBLIC_REPO_TOKEN }}
     steps:
-      - name: Verifica token dedicato
+      - name: Verifica token sorgente
         shell: bash
         run: |
           set -euo pipefail
-          test -n "$WORKFLOW_PAT" || { echo '::error::Secret WORKFLOW_PAT mancante'; exit 1; }
+          test -n "$SOURCE_PAT" || { echo '::error::Secret PUBLIC_REPO_TOKEN mancante'; exit 1; }
 
       - name: Checkout repo pubblica
         uses: actions/checkout@v4
@@ -44,7 +44,7 @@ jobs:
         with:
           repository: ${{ env.PRIVATE_REPOSITORY }}
           ref: main
-          token: ${{ env.WORKFLOW_PAT }}
+          token: ${{ env.SOURCE_PAT }}
           path: source
           fetch-depth: 1
           persist-credentials: true
@@ -137,7 +137,6 @@ jobs:
                 width:314px;
                 height:314px;
                 max-width:none;
-                flex:none;
                 object-fit:contain;
                 image-rendering:auto;
                 filter:none;
@@ -222,7 +221,7 @@ jobs:
         continue-on-error: true
         shell: bash
         env:
-          GH_TOKEN: ${{ env.WORKFLOW_PAT }}
+          GH_TOKEN: ${{ env.SOURCE_PAT }}
         run: |
           gh workflow run build-exe-registratore.yml \
             --repo Mirkolas/riflessahairbeauty-workflows \
