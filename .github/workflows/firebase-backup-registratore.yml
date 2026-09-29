@@ -2,10 +2,16 @@ name: Firebase backup - registratore
 
 on:
   schedule:
-    # GitHub cron usa UTC. I due orari coprono ora legale/solare italiana;
-    # il gate esegue davvero il backup solo quando in Europe/Rome e domenica ore 00.
+    # GitHub cron usa UTC. I due orari coprono ora legale/solare italiana.
+    # Il gate valuta l'ORARIO PIANIFICATO (non quello reale del runner, che GitHub puo ritardare).
     - cron: "0 22 * * 6"
     - cron: "0 23 * * 6"
+  # Una modifica a questo workflow forza un backup di recupero immediato.
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/firebase-backup-registratore.yml"
   workflow_dispatch:
 
 permissions:
@@ -32,23 +38,55 @@ jobs:
       - name: Verifica orario backup Italia
         id: schedule_gate
         shell: bash
+        env:
+          SCHEDULE_CRON: ${{ github.event.schedule }}
         run: |
           set -euo pipefail
-          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" || "${GITHUB_EVENT_NAME}" == "push" ]]; then
             echo "run=true" >> "${GITHUB_OUTPUT}"
-            echo "Avvio manuale autorizzato."
+            echo "Avvio ${GITHUB_EVENT_NAME} autorizzato."
             exit 0
           fi
-          LOCAL_DAY="$(TZ=Europe/Rome date +%u)"
-          LOCAL_HOUR="$(TZ=Europe/Rome date +%H)"
-          LOCAL_NOW="$(TZ=Europe/Rome date +'%Y-%m-%d %H:%M:%S %Z')"
-          echo "Ora italiana: ${LOCAL_NOW}"
+
+          [[ "${GITHUB_EVENT_NAME}" == "schedule" ]] || {
+            echo "run=false" >> "${GITHUB_OUTPUT}"
+            echo "Evento non previsto: nessun backup."
+            exit 0
+          }
+
+          # GitHub Actions puo avviare i cron anche con forte ritardo. Per questo NON
+          # controlliamo l'ora reale del runner: ricostruiamo l'istante previsto dal cron.
+          UTC_DOW="$(date -u +%u)"
+          if [[ "${UTC_DOW}" == "6" ]]; then
+            SCHEDULE_DATE="$(date -u +%F)"
+          elif [[ "${UTC_DOW}" == "7" ]]; then
+            SCHEDULE_DATE="$(date -u -d 'yesterday' +%F)"
+          else
+            SCHEDULE_DATE="$(date -u -d 'last saturday' +%F)"
+          fi
+
+          CRON_HOUR="$(awk '{print $2}' <<< "${SCHEDULE_CRON}")"
+          [[ "${CRON_HOUR}" =~ ^(22|23)$ ]] || {
+            echo "::error::Cron inatteso: ${SCHEDULE_CRON}"
+            exit 1
+          }
+
+          SCHEDULED_UTC="${SCHEDULE_DATE} ${CRON_HOUR}:00:00 UTC"
+          LOCAL_DAY="$(TZ=Europe/Rome date -d "${SCHEDULED_UTC}" +%u)"
+          LOCAL_HOUR="$(TZ=Europe/Rome date -d "${SCHEDULED_UTC}" +%H)"
+          LOCAL_PLANNED="$(TZ=Europe/Rome date -d "${SCHEDULED_UTC}" +'%Y-%m-%d %H:%M:%S %Z')"
+
+          echo "Cron ricevuto: ${SCHEDULE_CRON}"
+          echo "Istante pianificato in Italia: ${LOCAL_PLANNED}"
+          echo "Istante reale runner: $(TZ=Europe/Rome date +'%Y-%m-%d %H:%M:%S %Z')"
+
           if [[ "${LOCAL_DAY}" == "7" && "${LOCAL_HOUR}" == "00" ]]; then
             echo "run=true" >> "${GITHUB_OUTPUT}"
-            echo "Domenica a mezzanotte in Italia: avvio backup."
+            echo "Questo cron rappresenta la mezzanotte italiana: avvio backup."
           else
             echo "run=false" >> "${GITHUB_OUTPUT}"
-            echo "Passaggio UTC non corrispondente alla mezzanotte italiana: nessun backup."
+            echo "Questo e il cron gemello per l'altro offset DST: nessun backup."
           fi
 
       - name: Verifica configurazione protetta
