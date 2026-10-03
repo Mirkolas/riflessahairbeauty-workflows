@@ -2,7 +2,7 @@ name: Build EXE - registratore
 
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "0 * * * *"
   workflow_dispatch:
   push:
     branches: [main]
@@ -51,7 +51,8 @@ jobs:
           token: ${{ env.SOURCE_PAT }}
           path: source
           persist-credentials: false
-          fetch-depth: 1
+          # Serve la cronologia per individuare l'ultimo commit che ha modificato davvero l'app.
+          fetch-depth: 0
 
       - name: Autenticazione Google Cloud
         uses: google-github-actions/auth@v2
@@ -69,9 +70,11 @@ jobs:
           GH_TOKEN: ${{ env.SOURCE_PAT }}
         run: |
           set -euo pipefail
-          cd "source/${APP_DIR}"
+          SOURCE_ROOT="${GITHUB_WORKSPACE}/source"
+          SOURCE_SHA="$(git -C "${SOURCE_ROOT}" log -1 --format=%H -- "${APP_DIR}")"
+          [[ -n "${SOURCE_SHA}" ]] || { echo "::error::Impossibile determinare il commit sorgente dell'app."; exit 1; }
+          cd "${SOURCE_ROOT}/${APP_DIR}"
           VERSION="$(node -p "require('./package.json').version")"
-          SOURCE_SHA="$(git -C ../.. rev-parse HEAD)"
           TAG="registratore-v${VERSION}"
           PORTABLE="riflessa-app-${VERSION}.exe"
           INSTALLER="RiflessaRegistratore-Setup-${VERSION}-x64.exe"
@@ -88,7 +91,7 @@ jobs:
           if [[ -n "$RELEASE_JSON" ]]; then
             RELEASE_TARGET="$(jq -r '.target_commitish // empty' <<<"$RELEASE_JSON")"
             if [[ "$RELEASE_TARGET" != "$SOURCE_SHA" ]]; then
-              echo "::error::La release ${TAG} esiste per il commit ${RELEASE_TARGET:-sconosciuto}, ma main punta a ${SOURCE_SHA}. Incrementare la versione prima di pubblicare sorgente diversa."
+              echo "::error::La release ${TAG} esiste per il commit ${RELEASE_TARGET:-sconosciuto}, ma l'ultima modifica reale dell'app e ${SOURCE_SHA}. Incrementare la versione solo quando cambia il codice dell'app."
               exit 1
             fi
 
@@ -116,7 +119,7 @@ jobs:
           FIRESTORE_READY=false
           if [[ "$CURRENT_VERSION" == "$VERSION" ]]; then
             if [[ "$CURRENT_SOURCE_SHA" != "$SOURCE_SHA" ]]; then
-              echo "::error::Il canale Firestore dichiara la versione ${VERSION} ma appartiene al commit ${CURRENT_SOURCE_SHA:-sconosciuto}; sorgente corrente ${SOURCE_SHA}. Incrementare la versione o correggere il canale prima di proseguire."
+              echo "::error::Il canale Firestore dichiara la versione ${VERSION} ma appartiene al commit app ${CURRENT_SOURCE_SHA:-sconosciuto}; ultima modifica reale dell'app ${SOURCE_SHA}. Incrementare la versione solo se il codice dell'app e cambiato."
               exit 1
             fi
             FIRESTORE_READY=true
